@@ -1,0 +1,60 @@
+# PhantomClaw Configuration
+# --------------------------
+# All values can be overridden via environment variables with PHANTOM_ prefix.
+# Example: PHANTOM_TELEGRAM_TOKEN=your_token_here
+
+bot:
+  name: PhantomClaw
+  mode: AUTO                    # OBSERVE | SUGGEST | AUTO | HALT
+  timezone: Asia/Kuala_Lumpur   # MYT = UTC+8
+  log_level: info               # debug | info | warn | error
+
+telegram:
+  token: ""                     # Set via PHANTOM_TELEGRAM_TOKEN env var
+  chat_id: 0                    # Your Telegram user/chat ID
+
+llm:
+  primary: claude               # claude | openai | gemini | deepseek
+  claude:
+    api_key: ""                 # Set via PHANTOM_LLM_CLAUDE_API_KEY
+    model: claude-sonnet-4-20250514
+  openai:
+    api_key: ""                 # Set via PHANTOM_LLM_OPENAI_API_KEY
+    model: gpt-4o
+  gemini:
+    api_key: ""                 # Set via PHANTOM_LLM_GEMINI_API_KEY
+    model: gemini-2.5-flash
+  deepseek:
+    api_key: ""                 # Set via PHANTOM_LLM_DEEPSEEK_API_KEY
+    model: deepseek-chat
+
+bridge:
+  host: "127.0.0.1"
+  port: 8765
+
+risk:
+  max_lot_size: 0.10            # Maximum lot size per trade
+  max_daily_loss_usd: 100.0     # Hard daily loss limit (USD)
+  max_open_positions: 3         # Maximum concurrent open positions
+  max_drawdown_pct: 10.0        # Max drawdown % before auto-HALT
+  suggest_timeout_sec: 180      # SUGGEST mode approval timeout (seconds)
+  min_trade_interval: "15m"     # Minimum time between trades
+  ramp_up_trades: 10            # Number of profitable trades before full lot
+  ramp_up_lot_pct: 0.50         # Lot percentage during ramp-up (50%)
+
+sessions:
+  tokyo_open: "08:00"           # MYT — RESEARCH mode starts
+  pre_london: "14:45"           # MYT — Pre-session Telegram alert
+  london_open: "15:00"          # MYT — TRADING mode starts
+  ny_overlap_end: "00:00"       # MYT — Hard stop, no new trades
+  learning_start: "00:00"       # MYT — LEARNING mode starts
+  learning_end: "08:00"         # MYT — LEARNING mode ends
+
+memory:
+  db_path: "data/phantom.db"
+
+pairs:
+  - XAUUSD
+  - EURUSD
+  - USDJPY
+  - GBPUSD
