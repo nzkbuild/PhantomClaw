@@ -49,6 +49,11 @@ func (db *DB) Close() error {
 	return db.conn.Close()
 }
 
+// QueryRow exposes a single-row SQL query for flexible lookups.
+func (db *DB) QueryRow(query string, args ...any) *sql.Row {
+	return db.conn.QueryRow(query, args...)
+}
+
 // --- Trade Operations ---
 
 // Trade represents a single trade record.
