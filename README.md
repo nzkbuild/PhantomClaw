@@ -1,87 +1,303 @@
-# PhantomClaw 🐾
+# 🐾 PhantomClaw
 
-**Autonomous AI Trading Agent** — Go + Claude + MT5 + Telegram
+> Your personal AI trading assistant that thinks, trades, and learns — all on autopilot.
 
-PhantomClaw is a personal trading agent that thinks with LLMs, executes via MT5 pending orders, learns from every trade, and communicates through Telegram. It runs 24/7 on a Windows VPS.
+PhantomClaw is an autonomous trading bot that connects to **MetaTrader 5** and uses AI (Claude, GPT-4o, or DeepSeek) to analyze markets and place trades for you. It runs 24/7 on your Windows VPS, communicates with you through **Telegram**, and gets smarter after every trade.
 
-## Quick Start
+**Private use only.**
 
-```bash
-# 1. Clone
+---
+
+## 📋 Table of Contents
+
+- [What It Does](#-what-it-does)
+- [What You Need](#-what-you-need)
+- [Setup Guide](#-setup-guide)
+- [How to Run](#-how-to-run)
+- [Controlling the Bot](#-controlling-the-bot)
+- [How It Works](#-how-it-works)
+- [Trading Sessions](#-trading-sessions)
+- [Safety Features](#-safety-features)
+- [Configuration](#-configuration)
+- [File Structure](#-file-structure)
+- [Troubleshooting](#-troubleshooting)
+
+---
+
+## 🧠 What It Does
+
+1. **Reads the market** — Your MT5 Expert Advisor sends live price data to PhantomClaw every minute
+2. **Thinks with AI** — The bot asks Claude/GPT-4o to analyze the data, check past lessons, news, and sentiment
+3. **Decides to trade or wait** — A confidence score (0-100) determines if the setup is strong enough
+4. **Places pending orders** — If confidence is high enough, it places a limit/stop order in MT5
+5. **Learns from results** — After every trade closes, the AI writes a lesson and updates its strategy
+6. **Tells you what's happening** — You get Telegram alerts for trade decisions, session changes, and health pings
+
+---
+
+## 📦 What You Need
+
+Before setting up PhantomClaw, make sure you have:
+
+| Item | Where to Get It |
+|------|----------------|
+| **Windows VPS** (or PC that's always on) | Any VPS provider — yours is already set up |
+| **MetaTrader 5** installed on the VPS | Your broker provides this |
+| **Go 1.21+** installed | [Download Go](https://go.dev/dl/) |
+| **GCC compiler** (for SQLite) | Install [TDM-GCC](https://jmeubank.github.io/tdm-gcc/) — pick the 64-bit version |
+| **Telegram Bot token** | Talk to [@BotFather](https://t.me/BotFather) on Telegram |
+| **Your Telegram Chat ID** | Talk to [@userinfobot](https://t.me/userinfobot) on Telegram |
+| **AI API key** (at least one) | Get from [Anthropic](https://console.anthropic.com/), [OpenAI](https://platform.openai.com/), or [DeepSeek](https://platform.deepseek.com/) |
+
+---
+
+## 🚀 Setup Guide
+
+### Step 1: Download the code
+
+Open PowerShell on your VPS and run:
+
+```powershell
+cd C:\
 git clone https://github.com/nzkbuild/PhantomClaw.git
 cd PhantomClaw
+```
 
-# 2. Configure
-cp config.yaml config.local.yaml
-# Edit config.local.yaml — set API keys via env vars:
-#   PHANTOM_TELEGRAM_TOKEN=your_token
-#   PHANTOM_LLM_CLAUDE_API_KEY=your_key
+### Step 2: Set your API keys
 
-# 3. Build
+Set these environment variables in PowerShell. Replace the values with your actual keys:
+
+```powershell
+# Required — at least one AI provider
+$env:PHANTOM_LLM_CLAUDE_API_KEY = "sk-ant-your-key-here"
+
+# Optional — add more for fallback (if Claude fails, it tries OpenAI, then DeepSeek)
+$env:PHANTOM_LLM_OPENAI_API_KEY = "sk-your-openai-key"
+$env:PHANTOM_LLM_DEEPSEEK_API_KEY = "sk-your-deepseek-key"
+
+# Required — Telegram
+$env:PHANTOM_TELEGRAM_TOKEN = "123456:ABC-your-bot-token"
+$env:PHANTOM_TELEGRAM_CHAT_ID = "your-chat-id-number"
+```
+
+> 💡 **To make these permanent** (survive restarts), add them to System Environment Variables:
+> Settings → System → About → Advanced system settings → Environment Variables → New
+
+### Step 3: Edit config.yaml (optional)
+
+The default settings are safe to start with. But if you want to adjust risk limits:
+
+```yaml
+risk:
+  max_lot_size: 0.10       # Biggest trade size (start small!)
+  max_daily_loss_usd: 100  # Stop trading if daily losses hit $100
+  max_open_positions: 3    # Max 3 trades open at once
+```
+
+### Step 4: Build the bot
+
+```powershell
+cd C:\PhantomClaw
 go build -o phantomclaw.exe ./cmd/phantomclaw/
-
-# 4. Run
-.\phantomclaw.exe -config config.yaml
 ```
 
-## Architecture
+If you see `CGO_ENABLED` errors, make sure TDM-GCC is installed and in your PATH.
+
+### Step 5: Install the MT5 Expert Advisor
+
+1. Copy `ea/PhantomClaw.mq5` to your MT5 `Experts` folder:
+   ```
+   C:\Users\YourName\AppData\Roaming\MetaQuotes\Terminal\YOUR_TERMINAL_ID\MQL5\Experts\
+   ```
+2. Open MT5 → Navigator → Expert Advisors → right-click → Refresh
+3. Drag `PhantomClaw` onto your XAUUSD H1 chart
+4. **Important:** Go to Tools → Options → Expert Advisors → ✅ Allow WebRequest for listed URLs → Add `http://127.0.0.1:8765`
+
+### Step 6: Run it!
+
+```powershell
+cd C:\PhantomClaw
+.\phantomclaw.exe
+```
+
+You should see:
+```
+🐾 PhantomClaw v1.0.0 starting...
+config loaded (mode=AUTO, tz=Asia/Kuala_Lumpur, pairs=[XAUUSD EURUSD USDJPY GBPUSD])
+memory: SQLite initialized
+risk: engine initialized
+agent: brain initialized with full integrations
+🐾 PhantomClaw is running
+```
+
+Open Telegram and send `/status` to your bot — it should reply!
+
+---
+
+## 🎮 Controlling the Bot
+
+Everything is controlled through **Telegram**. Just send these commands to your bot:
+
+| Command | What It Does |
+|---------|-------------|
+| `/status` | Shows current mode, open positions, daily P&L, and session |
+| `/halt` | 🛑 **Emergency stop** — freezes all trading immediately |
+| `/mode auto` | Resume autonomous trading |
+| `/mode observe` | Bot watches the market but doesn't trade |
+| `/report` | Shows today's trade diary |
+| `/pairs` | Shows active pairs and their win rates |
+| `/confidence` | Shows the current confidence score |
+| `/rollback` | Shows strategy versions (undo strategy changes) |
+| `/config` | Shows your risk settings |
+| `/help` | Shows all commands |
+
+### Most Important Commands
+
+- **Something going wrong?** → Send `/halt` immediately
+- **Want to check what it's doing?** → Send `/status`
+- **Want to resume after a halt?** → Send `/mode auto`
+
+---
+
+## ⚙️ How It Works
 
 ```
-YOU (Telegram) ←→ Go Agent ←→ MT5 EA (pending orders)
-                    ↕
-              SQLite Memory
-              LLM (Claude)
+                    You (Telegram)
+                         ↕
+   MT5 EA ──signals──→ PhantomClaw Bot ──orders──→ MT5 EA
+                         ↕
+                    AI (Claude/GPT-4o)
+                         ↕
+                   Memory (SQLite DB)
+                   - Trade history
+                   - Lessons learned
+                   - Strategy document
+                   - Daily diary
 ```
 
-## Telegram Commands
+**The loop:**
+1. EA sends candle data + indicators every 60 seconds
+2. Bot builds a prompt with: market data + strategy doc + past lessons + news + sentiment
+3. AI analyzes and returns: HOLD or PLACE_PENDING (with price, SL, TP)
+4. Bot checks: confidence score → correlation guard → spread filter → risk limits
+5. If all checks pass → sends order back to EA
+6. EA places the pending order in MT5
+7. When order fills and closes → EA reports result → AI writes a lesson
 
-| Command | Action |
-|---------|--------|
-| `/status` | Mode, positions, PnL, session |
-| `/mode auto\|suggest\|observe\|halt` | Switch mode |
-| `/halt` | Emergency stop |
-| `/report` | Daily summary |
-| `/pairs` | Active pairs |
-| `/pending` | Pending orders |
-| `/confidence` | Confidence scores |
-| `/config` | Risk config |
+---
 
-## Project Structure
+## 🕐 Trading Sessions
+
+PhantomClaw follows a daily schedule (all times in MYT / UTC+8):
+
+| Time | Mode | What Happens |
+|------|------|-------------|
+| 00:00 – 08:00 | 🌙 LEARNING | Reviews past trades, rebuilds strategy, no trading |
+| 08:00 – 15:00 | 📊 RESEARCH | Collects data, analyzes pairs, prepares orders |
+| 15:00 – 00:00 | 💰 TRADING | Active trading via pending orders (London + NY sessions) |
+
+**Key alerts you'll receive:**
+- ☀️ 08:00 — Morning brief
+- ⚡ 14:45 — "15 minutes to London open"
+- 🇬🇧 15:00 — Trading mode activated
+- 🇺🇸 20:00 — NY session overlap (peak liquidity)
+- 💓 Every 6 hours — Health ping ("I'm still running")
+
+---
+
+## 🛡️ Safety Features
+
+PhantomClaw has multiple layers of protection — **the AI cannot override these:**
+
+| Protection | What It Does |
+|-----------|-------------|
+| **Max daily loss** | Stops trading if losses exceed $100/day (configurable) |
+| **Max lot size** | Can never place a trade larger than 0.10 lots (configurable) |
+| **Max open positions** | Can never have more than 3 trades open at once |
+| **Drawdown circuit breaker** | Auto-HALT if account drops 10% from peak |
+| **Minimum trade interval** | Must wait 15 minutes between trades |
+| **Confidence gate** | Score below 40 = trade is blocked, no exceptions |
+| **Correlation guard** | Blocks conflicting trades (e.g., buy EUR/USD + sell GBP/USD) |
+| **Spread filter** | Blocks trades when spread is unusually wide (>2x average) |
+| **Ramp-up system** | Starts with 50% lot size until 10 profitable trades prove consistency |
+| **Weekend detection** | No trading on weekends |
+| **Session enforcement** | OBSERVE mode forced outside trading hours |
+| **`/halt` command** | You can freeze everything instantly from Telegram |
+
+---
+
+## 🔧 Configuration
+
+All settings are in `config.yaml`. You can also override any setting with environment variables using the `PHANTOM_` prefix.
+
+**Examples:**
+```powershell
+# Override config values without editing the file
+$env:PHANTOM_BOT_MODE = "OBSERVE"
+$env:PHANTOM_RISK_MAX_LOT_SIZE = "0.05"
+$env:PHANTOM_RISK_MAX_DAILY_LOSS_USD = "50"
+```
+
+---
+
+## 📁 File Structure
 
 ```
 PhantomClaw/
-├── cmd/phantomclaw/main.go     # Entry point
-├── internal/
-│   ├── bridge/                 # MT5 REST bridge
-│   ├── config/                 # Config loader (Viper)
-│   ├── llm/                    # LLM provider adapters
-│   ├── memory/                 # SQLite layer
-│   ├── risk/                   # Risk guardrails
-│   ├── safety/                 # Mode management
-│   ├── scheduler/              # Session scheduler
-│   ├── skills/                 # Tool dispatch + confidence scoring
-│   └── telegram/               # Bot commands
-├── ea/PhantomClaw.mq5          # MT5 Expert Advisor
-├── config.yaml                 # Default config
-└── PRD.md                      # Product Requirements Document
+├── phantomclaw.exe          ← The bot (after you build it)
+├── config.yaml              ← Your settings
+├── ea/
+│   └── PhantomClaw.mq5      ← MT5 Expert Advisor (copy to MT5)
+├── data/
+│   ├── phantom.db            ← Memory database (auto-created)
+│   └── logs/
+│       └── phantomclaw.log   ← Log file (auto-created)
+├── cmd/phantomclaw/
+│   └── main.go               ← Entry point
+├── internal/                  ← All the brain code
+│   ├── agent/                 ← The AI decision engine
+│   ├── bridge/                ← MT5 communication
+│   ├── llm/                   ← AI provider connections
+│   ├── memory/                ← Database & learning
+│   ├── risk/                  ← Safety guardrails
+│   └── ...
+└── PRD.md                     ← Product Requirements Document
 ```
 
-## Trading Sessions (MYT/UTC+8)
+---
 
-| Time | Mode | Activity |
-|------|------|----------|
-| 00:00–08:00 | LEARNING | Review, strategy patches, DB housekeeping |
-| 08:00–15:00 | RESEARCH | Data collection, MTF analysis, pending order placement |
-| 15:00–00:00 | TRADING | Live execution via pending orders |
+## ❓ Troubleshooting
 
-## Safety
+### "agent brain not configured"
+→ You haven't set any AI API key. Set `PHANTOM_LLM_CLAUDE_API_KEY` (or another provider).
 
-- **AUTO mode** (default) — trades within hard risk limits
-- Risk guardrails in Go code — LLM cannot override
-- Drawdown circuit breaker → auto-HALT
-- Confidence scoring gate (score < 40 = blocked)
-- `/halt` emergency stop via Telegram
+### MT5 EA shows "WebRequest error 4014"
+→ You need to allow the URL in MT5: Tools → Options → Expert Advisors → Allow WebRequest → Add `http://127.0.0.1:8765`
 
-## License
+### Bot doesn't respond on Telegram
+→ Check your `PHANTOM_TELEGRAM_TOKEN` and `PHANTOM_TELEGRAM_CHAT_ID` are correct. Send `/start` to your bot first.
 
-Private — Personal use only
+### "CGO_ENABLED" build error
+→ Install [TDM-GCC](https://jmeubank.github.io/tdm-gcc/) (64-bit). This is needed for the SQLite database.
+
+### Bot stops when I close PowerShell
+→ Run it as a background service. Quick method:
+```powershell
+Start-Process -WindowStyle Hidden .\phantomclaw.exe
+```
+
+### How do I check if it's running?
+→ Send `/status` on Telegram. If you get a reply, it's alive.
+
+### How do I stop it?
+→ Send `/halt` on Telegram (freezes trading) or press `Ctrl+C` in the terminal (stops the bot).
+
+---
+
+## 📜 License
+
+**Private use only.** Not for distribution.
+
+---
+
+*Built with Go, Claude, and a lot of coffee ☕*

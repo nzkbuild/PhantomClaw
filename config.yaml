@@ -52,6 +52,7 @@ sessions:
 
 memory:
   db_path: "data/phantom.db"
+  log_dir: "data/logs"
 
 pairs:
   - XAUUSD
