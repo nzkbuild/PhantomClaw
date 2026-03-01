@@ -54,6 +54,11 @@ func (db *DB) QueryRow(query string, args ...any) *sql.Row {
 	return db.conn.QueryRow(query, args...)
 }
 
+// QueryRows exposes a multi-row SQL query for flexible lookups.
+func (db *DB) QueryRows(query string, args ...any) (*sql.Rows, error) {
+	return db.conn.Query(query, args...)
+}
+
 // --- Trade Operations ---
 
 // Trade represents a single trade record.

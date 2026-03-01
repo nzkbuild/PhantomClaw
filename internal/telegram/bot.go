@@ -9,9 +9,11 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
+	"github.com/nzkbuild/PhantomClaw/internal/memory"
 	"github.com/nzkbuild/PhantomClaw/internal/risk"
 	"github.com/nzkbuild/PhantomClaw/internal/safety"
 	"github.com/nzkbuild/PhantomClaw/internal/scheduler"
+	"github.com/nzkbuild/PhantomClaw/internal/skills"
 )
 
 // Dependencies holds references to subsystems for command handlers.
@@ -19,6 +21,9 @@ type Dependencies struct {
 	Safety    *safety.Manager
 	Risk      *risk.Engine
 	Scheduler *scheduler.Scheduler
+	Memory    *memory.DB
+	Diary     *memory.DiaryWriter
+	Strategy  *memory.StrategyManager
 }
 
 // Bot wraps the Telegram bot and handles command dispatch.
@@ -45,7 +50,6 @@ func New(token string, chatID int64, deps Dependencies) (*Bot, error) {
 		return nil, fmt.Errorf("telegram: init error: %w", err)
 	}
 
-	// Register command handlers
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/status", bot.MatchTypePrefix, tb.handleStatus)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/halt", bot.MatchTypePrefix, tb.handleHalt)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/mode", bot.MatchTypePrefix, tb.handleMode)
@@ -54,6 +58,7 @@ func New(token string, chatID int64, deps Dependencies) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/pending", bot.MatchTypePrefix, tb.handlePending)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/confidence", bot.MatchTypePrefix, tb.handleConfidence)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/config", bot.MatchTypePrefix, tb.handleConfig)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/rollback", bot.MatchTypePrefix, tb.handleRollback)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypePrefix, tb.handleHelp)
 
 	tb.b = b
@@ -153,16 +158,33 @@ func (tb *Bot) handleMode(ctx context.Context, b *bot.Bot, update *models.Update
 
 func (tb *Bot) handleReport(ctx context.Context, b *bot.Bot, update *models.Update) {
 	stats := tb.deps.Risk.Stats()
+
+	var diaryText string
+	if tb.deps.Diary != nil {
+		entries, err := tb.deps.Diary.GetToday()
+		if err == nil && len(entries) > 0 {
+			var sb strings.Builder
+			for _, e := range entries {
+				sb.WriteString(fmt.Sprintf("• [%s] %s\n", e.EntryType, e.Content))
+			}
+			diaryText = sb.String()
+		}
+	}
+	if diaryText == "" {
+		diaryText = "_No diary entries today_"
+	}
+
 	msg := fmt.Sprintf("📊 *Daily Report*\n\n"+
-		"Daily P&L: -$%.2f (loss tracked)\n"+
+		"Daily P&L: -$%.2f\n"+
 		"Open Positions: %d\n"+
 		"Profitable Trades: %d\n"+
 		"Session: %s\n\n"+
-		"_Full report coming in Phase 2 (trade journal + lessons)_",
+		"*Today's Diary:*\n%s",
 		stats.DailyLoss,
 		stats.OpenPositions,
 		stats.ProfitableTrades,
 		tb.deps.Scheduler.CurrentSession(),
+		diaryText,
 	)
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
@@ -173,9 +195,35 @@ func (tb *Bot) handleReport(ctx context.Context, b *bot.Bot, update *models.Upda
 }
 
 func (tb *Bot) handlePairs(ctx context.Context, b *bot.Bot, update *models.Update) {
+	var msg strings.Builder
+	msg.WriteString("📈 *Active Pairs*\n\n")
+
+	if tb.deps.Memory != nil {
+		rows, err := tb.deps.Memory.QueryRows(
+			"SELECT symbol, bias, win_rate_7d, avg_pnl_7d FROM pair_state ORDER BY updated_at DESC LIMIT 10",
+		)
+		if err == nil {
+			defer rows.Close()
+			found := false
+			for rows.Next() {
+				var symbol, bias string
+				var winRate, avgPnl float64
+				rows.Scan(&symbol, &bias, &winRate, &avgPnl)
+				msg.WriteString(fmt.Sprintf("• %s: %s (WR: %.0f%%, PnL: $%.2f)\n",
+					symbol, bias, winRate*100, avgPnl))
+				found = true
+			}
+			if !found {
+				msg.WriteString("_No pair state data yet — trades needed_\n")
+			}
+		}
+	} else {
+		msg.WriteString("XAUUSD, EURUSD, USDJPY, GBPUSD\n")
+	}
+
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
-		Text:      "📈 *Active Pairs*\n\nXAUUSD, EURUSD, USDJPY, GBPUSD\n\n_Pair state + LRU ranking coming in Phase 2_",
+		Text:      msg.String(),
 		ParseMode: models.ParseModeMarkdown,
 	})
 }
@@ -183,26 +231,37 @@ func (tb *Bot) handlePairs(ctx context.Context, b *bot.Bot, update *models.Updat
 func (tb *Bot) handlePending(ctx context.Context, b *bot.Bot, update *models.Update) {
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
-		Text:      "📋 *Pending Orders*\n\nNo active pending orders (stub)\n\n_Live pending order tracking coming in Phase 2_",
+		Text:      "📋 *Pending Orders*\n\n_Pending orders are managed by the EA. Check MT5 terminal for live status._",
 		ParseMode: models.ParseModeMarkdown,
 	})
 }
 
 func (tb *Bot) handleConfidence(ctx context.Context, b *bot.Bot, update *models.Update) {
+	conf := skills.ScoreConfidence(skills.ConfidenceInput{
+		Session: string(tb.deps.Scheduler.CurrentSession()),
+	})
+
+	msg := fmt.Sprintf("🎯 *Confidence Score*\n\n"+
+		"Score: %d/100\n"+
+		"Action: %s\n"+
+		"Lot Factor: %.1fx\n\n"+
+		"_Score based on current session quality. Full 7-factor scoring requires live market data._",
+		conf.Score, conf.Action, conf.LotFactor,
+	)
+
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
-		Text:      "🎯 *Confidence Scores*\n\nNo active analysis (stub)\n\n_Live confidence breakdown per pair coming in Phase 2_",
+		Text:      msg,
 		ParseMode: models.ParseModeMarkdown,
 	})
 }
 
 func (tb *Bot) handleConfig(ctx context.Context, b *bot.Bot, update *models.Update) {
 	stats := tb.deps.Risk.Stats()
-	msg := fmt.Sprintf("⚙️ *Risk Config (read-only)*\n\n"+
+	msg := fmt.Sprintf("⚙️ *Risk Config*\n\n"+
 		"Max Open Positions: %d\n"+
 		"Ramp-up Target: %d trades\n"+
-		"Halted: %v\n\n"+
-		"_Full config display coming in Phase 2_",
+		"Halted: %v",
 		stats.MaxPositions,
 		stats.RampUpTarget,
 		stats.Halted,
@@ -215,15 +274,70 @@ func (tb *Bot) handleConfig(ctx context.Context, b *bot.Bot, update *models.Upda
 	})
 }
 
+func (tb *Bot) handleRollback(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if tb.deps.Strategy == nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Strategy manager not configured",
+		})
+		return
+	}
+
+	versions, err := tb.deps.Strategy.ListVersions(5)
+	if err != nil || len(versions) == 0 {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "📜 No strategy versions available yet.",
+		})
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📜 *Strategy Versions*\n\n")
+	for _, v := range versions {
+		sb.WriteString(fmt.Sprintf("v%d — %s (%s)\n", v.Version, v.PatchType, v.Reason))
+	}
+	sb.WriteString("\n_Use `/rollback N` to revert to version N_")
+
+	// Check if a version number was provided
+	parts := strings.Fields(update.Message.Text)
+	if len(parts) >= 2 {
+		var targetVersion int
+		fmt.Sscanf(parts[1], "%d", &targetVersion)
+		if targetVersion > 0 {
+			if err := tb.deps.Strategy.Rollback(targetVersion); err != nil {
+				b.SendMessage(ctx, &bot.SendMessageParams{
+					ChatID: update.Message.Chat.ID,
+					Text:   fmt.Sprintf("❌ Rollback failed: %v", err),
+				})
+				return
+			}
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID:    update.Message.Chat.ID,
+				Text:      fmt.Sprintf("✅ Rolled back to strategy v%d", targetVersion),
+				ParseMode: models.ParseModeMarkdown,
+			})
+			return
+		}
+	}
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    update.Message.Chat.ID,
+		Text:      sb.String(),
+		ParseMode: models.ParseModeMarkdown,
+	})
+}
+
 func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update) {
 	msg := "🤖 *PhantomClaw Commands*\n\n" +
 		"`/status` — Mode, positions, PnL, session\n" +
 		"`/mode observe|suggest|auto|halt` — Switch mode\n" +
 		"`/halt` — Emergency stop\n" +
-		"`/report` — Daily summary\n" +
+		"`/report` — Daily summary + diary\n" +
 		"`/pairs` — Active pairs + bias\n" +
-		"`/pending` — Pending orders\n" +
-		"`/confidence` — Confidence scores\n" +
+		"`/pending` — Pending orders (check MT5)\n" +
+		"`/confidence` — Current confidence score\n" +
+		"`/rollback [N]` — Strategy versions / rollback\n" +
 		"`/config` — Risk config\n" +
 		"`/help` — This message"
 
@@ -235,6 +349,5 @@ func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update
 }
 
 func (tb *Bot) handleUnknown(ctx context.Context, b *bot.Bot, update *models.Update) {
-	// Silently ignore non-command messages for now
-	// Phase 3 will wire /ask [question] to LLM conversation
+	// Silently ignore non-command messages
 }

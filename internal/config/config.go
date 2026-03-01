@@ -78,17 +78,18 @@ func (r RiskConfig) MinTradeIntervalDuration() time.Duration {
 
 // SessionConfig holds MYT session window definitions (PRD §6).
 type SessionConfig struct {
-	TokyoOpen     string `mapstructure:"tokyo_open"`      // "08:00"
-	PreLondon     string `mapstructure:"pre_london"`       // "14:45"
-	LondonOpen    string `mapstructure:"london_open"`      // "15:00"
-	NYOverlapEnd  string `mapstructure:"ny_overlap_end"`   // "00:00"
-	LearningStart string `mapstructure:"learning_start"`   // "00:00"
-	LearningEnd   string `mapstructure:"learning_end"`     // "08:00"
+	TokyoOpen     string `mapstructure:"tokyo_open"`     // "08:00"
+	PreLondon     string `mapstructure:"pre_london"`     // "14:45"
+	LondonOpen    string `mapstructure:"london_open"`    // "15:00"
+	NYOverlapEnd  string `mapstructure:"ny_overlap_end"` // "00:00"
+	LearningStart string `mapstructure:"learning_start"` // "00:00"
+	LearningEnd   string `mapstructure:"learning_end"`   // "08:00"
 }
 
 // MemoryConfig holds SQLite database settings.
 type MemoryConfig struct {
 	DBPath string `mapstructure:"db_path"`
+	LogDir string `mapstructure:"log_dir"`
 }
 
 // Load reads configuration from file and environment variables.
@@ -122,6 +123,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("sessions.learning_end", "08:00")
 
 	v.SetDefault("memory.db_path", "data/phantom.db")
+	v.SetDefault("memory.log_dir", "data/logs")
 
 	v.SetDefault("llm.primary", "claude")
 	v.SetDefault("llm.claude.model", "claude-sonnet-4-20250514")
