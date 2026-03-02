@@ -10,6 +10,12 @@
 
 ---
 
+## Progress Log
+
+- 2026-03-02: Task 1 completed (bridge `request_id` correlation + EA request_id polling + bridge tests).
+
+---
+
 ## Scope and Sequence
 
 1. Bridge protocol and persistence (#2, #3, #4, #5)
@@ -428,4 +434,3 @@ Plan complete and saved to `docs/plans/2026-03-02-v3-foundation.md`. Two executi
 2. Parallel Session (separate) - Open new session with executing-plans, batch execution with checkpoints
 
 Which approach?
-

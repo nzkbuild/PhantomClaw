@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // SignalRequest is the payload sent by MT5 EA on candle close / threshold breach.
 type SignalRequest struct {
+	RequestID  string             `json:"request_id,omitempty"`
 	Symbol     string             `json:"symbol"`
 	Timeframe  string             `json:"timeframe"`
 	Bid        float64            `json:"bid"`
@@ -39,15 +41,16 @@ type OHLCV struct {
 
 // SignalResponse is sent back to the EA with the bot's decision.
 type SignalResponse struct {
-	Action string  `json:"action"`         // PLACE_PENDING | MODIFY_PENDING | CANCEL_PENDING | MARKET_CLOSE | HOLD
-	Type   string  `json:"type,omitempty"` // BUY_LIMIT | SELL_LIMIT | BUY_STOP | SELL_STOP
-	Symbol string  `json:"symbol,omitempty"`
-	Level  float64 `json:"level,omitempty"` // entry price for pending order
-	Lot    float64 `json:"lot,omitempty"`
-	SL     float64 `json:"sl,omitempty"`
-	TP     float64 `json:"tp,omitempty"`
-	Ticket int64   `json:"ticket,omitempty"` // for modify/cancel operations
-	Reason string  `json:"reason,omitempty"`
+	RequestID string  `json:"request_id,omitempty"`
+	Action    string  `json:"action"`         // PLACE_PENDING | MODIFY_PENDING | CANCEL_PENDING | MARKET_CLOSE | HOLD
+	Type      string  `json:"type,omitempty"` // BUY_LIMIT | SELL_LIMIT | BUY_STOP | SELL_STOP
+	Symbol    string  `json:"symbol,omitempty"`
+	Level     float64 `json:"level,omitempty"` // entry price for pending order
+	Lot       float64 `json:"lot,omitempty"`
+	SL        float64 `json:"sl,omitempty"`
+	TP        float64 `json:"tp,omitempty"`
+	Ticket    int64   `json:"ticket,omitempty"` // for modify/cancel operations
+	Reason    string  `json:"reason,omitempty"`
 }
 
 // TradeResultRequest is pushed by EA when a trade closes.
@@ -90,19 +93,22 @@ type Server struct {
 	mu               sync.RWMutex
 	latestBySymbol   map[string]SignalRequest
 	pendingBySymbol  map[string]SignalResponse
+	pendingByRequest map[string]SignalResponse
 	latestAccount    AccountSnapshot
 	hasAccountSample bool
+	requestSeq       uint64
 }
 
 // NewServer creates a new bridge server.
 func NewServer(host string, port int, onSignal SignalHandler, onTradeResult TradeResultHandler) *Server {
 	s := &Server{
-		host:            host,
-		port:            port,
-		onSignal:        onSignal,
-		onTradeResult:   onTradeResult,
-		latestBySymbol:  make(map[string]SignalRequest),
-		pendingBySymbol: make(map[string]SignalResponse),
+		host:             host,
+		port:             port,
+		onSignal:         onSignal,
+		onTradeResult:    onTradeResult,
+		latestBySymbol:   make(map[string]SignalRequest),
+		pendingBySymbol:  make(map[string]SignalResponse),
+		pendingByRequest: make(map[string]SignalResponse),
 	}
 
 	mux := http.NewServeMux()
@@ -142,6 +148,10 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid payload"}`, http.StatusBadRequest)
 		return
 	}
+	req.RequestID = strings.TrimSpace(req.RequestID)
+	if req.RequestID == "" {
+		req.RequestID = s.nextRequestID(strings.ToUpper(strings.TrimSpace(req.Symbol)))
+	}
 
 	s.mu.Lock()
 	s.latestBySymbol[strings.ToUpper(req.Symbol)] = req
@@ -162,59 +172,106 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 		go func(r SignalRequest) {
 			decision := s.onSignal(&r)
 			if decision == nil {
-				decision = &SignalResponse{Action: "HOLD", Reason: "no decision"}
+				decision = &SignalResponse{Action: "HOLD", Reason: "no decision", RequestID: r.RequestID}
+			}
+			if strings.TrimSpace(decision.RequestID) == "" {
+				decision.RequestID = r.RequestID
 			}
 
 			symbol := strings.ToUpper(strings.TrimSpace(r.Symbol))
 			if symbol == "" {
 				symbol = strings.ToUpper(strings.TrimSpace(decision.Symbol))
 			}
-			if symbol == "" {
-				return
+			if decision.Symbol == "" {
+				decision.Symbol = symbol
 			}
 
 			s.mu.Lock()
-			s.pendingBySymbol[symbol] = *decision
+			if symbol != "" {
+				s.pendingBySymbol[symbol] = *decision
+			}
+			if decision.RequestID != "" {
+				s.pendingByRequest[decision.RequestID] = *decision
+			}
 			s.mu.Unlock()
 		}(reqCopy)
 	}
 
 	// Immediate ACK (fire-and-forget).
 	resp := &SignalResponse{
-		Action: "HOLD",
-		Reason: "accepted_async",
+		RequestID: req.RequestID,
+		Action:    "HOLD",
+		Reason:    "accepted_async",
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-// handleDecision returns the latest pending decision for a symbol, if available.
+// handleDecision returns the latest pending decision by request_id (preferred) or symbol.
 // Decision is consumed once (removed after read).
 func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
+	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
 	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
-	if symbol == "" {
-		http.Error(w, `{"error":"symbol is required"}`, http.StatusBadRequest)
+	if requestID == "" && symbol == "" {
+		http.Error(w, `{"error":"request_id or symbol is required"}`, http.StatusBadRequest)
 		return
 	}
 
-	s.mu.Lock()
-	decision, ok := s.pendingBySymbol[symbol]
-	if ok {
-		delete(s.pendingBySymbol, symbol)
+	var (
+		decision SignalResponse
+		ok       bool
+	)
+
+	// Prefer request_id correlation if provided.
+	if requestID != "" {
+		s.mu.Lock()
+		decision, ok = s.pendingByRequest[requestID]
+		if ok {
+			delete(s.pendingByRequest, requestID)
+			if decision.Symbol != "" {
+				if bySymbol, exists := s.pendingBySymbol[decision.Symbol]; exists && bySymbol.RequestID == requestID {
+					delete(s.pendingBySymbol, decision.Symbol)
+				}
+			}
+		}
+		s.mu.Unlock()
 	}
-	s.mu.Unlock()
+
+	// Fallback to symbol polling for backward compatibility.
+	if !ok && symbol != "" {
+		s.mu.Lock()
+		decision, ok = s.pendingBySymbol[symbol]
+		if ok {
+			delete(s.pendingBySymbol, symbol)
+			if decision.RequestID != "" {
+				if byReq, exists := s.pendingByRequest[decision.RequestID]; exists && byReq.Symbol == symbol {
+					delete(s.pendingByRequest, decision.RequestID)
+				}
+			}
+		}
+		s.mu.Unlock()
+	}
 
 	if !ok {
 		decision = SignalResponse{
-			Action: "HOLD",
-			Reason: "no pending decision",
-			Symbol: symbol,
+			RequestID: requestID,
+			Action:    "HOLD",
+			Reason:    "no pending decision",
+			Symbol:    symbol,
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(decision)
+}
+
+func (s *Server) nextRequestID(symbol string) string {
+	seq := atomic.AddUint64(&s.requestSeq, 1)
+	if symbol == "" {
+		symbol = "UNKNOWN"
+	}
+	return fmt.Sprintf("%s-%d-%d", symbol, time.Now().UnixNano(), seq)
 }
 
 // handleTradeResult processes POST /trade-result from EA.

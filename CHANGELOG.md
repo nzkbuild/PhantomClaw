@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioned per [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Bridge request correlation support via `request_id` on `/signal` and `/decision`
+- Bridge tests for correlated decision fetch and backward-compatible symbol polling
+
+### Changed
+- EA now attaches `request_id` in signal payloads and includes it when polling `/decision`
+- Bridge now generates a request ID when absent to preserve compatibility with older EA behavior
+
 ## [2.0.0] - 2026-03-02
 
 ### Added

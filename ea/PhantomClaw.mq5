@@ -16,6 +16,8 @@ input int    RequestTimeoutMs  = 500;                 // Short timeout is fine (
 //--- Global variables
 datetime g_lastSignalTime = 0;
 int      g_requestTimeout = 500;
+long     g_requestSeq = 0;
+string   g_lastRequestID = "";
 
 //+------------------------------------------------------------------+
 //| Expert initialization                                             |
@@ -60,6 +62,8 @@ void OnTick()
 string BuildSignalPayload()
 {
    string symbol = Symbol();
+   g_requestSeq++;
+   g_lastRequestID = symbol + "_" + IntegerToString((int)TimeCurrent()) + "_" + IntegerToString((int)g_requestSeq);
    double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
    double spread = (ask - bid) / SymbolInfoDouble(symbol, SYMBOL_POINT);
@@ -94,6 +98,7 @@ string BuildSignalPayload()
 
    // Build JSON manually (MQL5 has no JSON library)
    string json = "{";
+   json += "\"request_id\":\"" + g_lastRequestID + "\",";
    json += "\"symbol\":\"" + symbol + "\",";
    json += "\"timeframe\":\"H1\",";
    json += "\"bid\":" + DoubleToString(bid, 5) + ",";
@@ -170,7 +175,10 @@ string GetFromAgent(string endpoint)
 void PollDecision()
 {
    string symbol = Symbol();
-   string response = GetFromAgent("/decision?symbol=" + symbol);
+   string endpoint = "/decision?symbol=" + symbol;
+   if(g_lastRequestID != "")
+      endpoint += "&request_id=" + g_lastRequestID;
+   string response = GetFromAgent(endpoint);
    if(response == "") return;
    ProcessResponse(response);
 }
