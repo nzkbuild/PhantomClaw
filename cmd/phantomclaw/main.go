@@ -263,6 +263,8 @@ func main() {
 		cfg.Bridge.Host,
 		cfg.Bridge.Port,
 		func(req *bridge.SignalRequest) *bridge.SignalResponse {
+			// Reconcile risk engine snapshot from MT5 before evaluating the new signal.
+			riskEngine.SyncAccountSnapshot(req.Equity, req.OpenPos)
 			if brain == nil {
 				return &bridge.SignalResponse{Action: "HOLD", Reason: "agent brain not configured (no LLM API key)"}
 			}

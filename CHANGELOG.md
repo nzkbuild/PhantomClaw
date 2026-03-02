@@ -12,6 +12,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Durable `pending_decisions` SQLite table and DB APIs for bridge decision persistence
 - Bridge tests for DB-backed decision delivery across in-memory queue loss (restart simulation)
 - `POST /decision/consume` endpoint for explicit decision consumption by `request_id`
+- Risk engine reconciliation API `SyncAccountSnapshot(equity, open_positions)`
+- Risk tests covering snapshot-driven open-position reconciliation and drawdown gating
 
 ### Changed
 - EA now attaches `request_id` in signal payloads and includes it when polling `/decision`
@@ -19,6 +21,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Bridge `NewServer` now accepts memory DB handle and persists pending decisions with TTL
 - Bridge decision lifecycle now follows `pending -> delivered -> consumed|expired`
 - EA decision polling now sends `consume=1` to preserve one-shot execution behavior
+- Signal callback now reconciles risk engine snapshot before evaluating each signal
 
 ## [2.0.0] - 2026-03-02
 

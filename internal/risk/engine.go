@@ -133,7 +133,23 @@ func (e *Engine) RecordTradeClose(pnl float64) {
 func (e *Engine) UpdateEquity(equity float64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.accountEquity = equity
+	if equity > 0 {
+		e.accountEquity = equity
+	}
+}
+
+// SyncAccountSnapshot reconciles risk engine state with the latest MT5 snapshot.
+// This is the source of truth after restarts or manual intervention in MT5.
+func (e *Engine) SyncAccountSnapshot(equity float64, openPositions int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if equity > 0 {
+		e.accountEquity = equity
+	}
+	if openPositions >= 0 {
+		e.openPositions = openPositions
+	}
 }
 
 // ResetDaily clears daily counters (called at 00:00 MYT).
