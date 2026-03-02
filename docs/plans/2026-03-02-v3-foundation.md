@@ -19,6 +19,7 @@
 - 2026-03-02: Task 5 completed (true drawdown gate uses peak-to-current equity, not dailyLoss/equity proxy).
 - 2026-03-02: Task 6 completed (Telegram inbound ACL via centralized auth wrapper + unit tests).
 - 2026-03-02: Task 7 completed (session alert callback now dispatches to Telegram sender; covered with unit tests).
+- 2026-03-02: Task 8 completed (request-scoped signal context with bounded timeout propagated to agent signal handler + timeout test).
 
 ---
 

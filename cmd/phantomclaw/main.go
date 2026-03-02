@@ -275,13 +275,13 @@ func main() {
 	bridgeServer := bridge.NewServer(
 		cfg.Bridge.Host,
 		cfg.Bridge.Port,
-		func(req *bridge.SignalRequest) *bridge.SignalResponse {
+		func(ctx context.Context, req *bridge.SignalRequest) *bridge.SignalResponse {
 			// Reconcile risk engine snapshot from MT5 before evaluating the new signal.
 			riskEngine.SyncAccountSnapshot(req.Equity, req.OpenPos)
 			if brain == nil {
 				return &bridge.SignalResponse{Action: "HOLD", Reason: "agent brain not configured (no LLM API key)"}
 			}
-			return brain.HandleSignal(context.Background(), req)
+			return brain.HandleSignal(ctx, req)
 		},
 		func(req *bridge.TradeResultRequest) {
 			logger.Infow("trade-result", "symbol", req.Symbol, "direction", req.Direction, "pnl", req.PnL)

@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +15,7 @@ import (
 )
 
 func TestBridgeRequestCorrelation(t *testing.T) {
-	s := NewServer("127.0.0.1", 0, func(req *SignalRequest) *SignalResponse {
+	s := NewServer("127.0.0.1", 0, func(ctx context.Context, req *SignalRequest) *SignalResponse {
 		return &SignalResponse{
 			Action: "PLACE_PENDING",
 			Type:   "BUY_LIMIT",
@@ -80,7 +81,7 @@ func TestBridgeRequestCorrelation(t *testing.T) {
 }
 
 func TestBridgeGeneratesRequestIDAndKeepsSymbolCompatibility(t *testing.T) {
-	s := NewServer("127.0.0.1", 0, func(req *SignalRequest) *SignalResponse {
+	s := NewServer("127.0.0.1", 0, func(ctx context.Context, req *SignalRequest) *SignalResponse {
 		return &SignalResponse{
 			Action: "PLACE_PENDING",
 			Type:   "SELL_LIMIT",
@@ -140,7 +141,7 @@ func TestBridgeDecisionPersistsInSQLite(t *testing.T) {
 	}
 	defer db.Close()
 
-	s := NewServer("127.0.0.1", 0, func(req *SignalRequest) *SignalResponse {
+	s := NewServer("127.0.0.1", 0, func(ctx context.Context, req *SignalRequest) *SignalResponse {
 		return &SignalResponse{
 			Action: "PLACE_PENDING",
 			Type:   "BUY_LIMIT",
@@ -206,7 +207,7 @@ func TestBridgeDecisionPersistsInSQLite(t *testing.T) {
 }
 
 func TestBridgeDecisionConsumeEndpoint(t *testing.T) {
-	s := NewServer("127.0.0.1", 0, func(req *SignalRequest) *SignalResponse {
+	s := NewServer("127.0.0.1", 0, func(ctx context.Context, req *SignalRequest) *SignalResponse {
 		return &SignalResponse{
 			Action: "PLACE_PENDING",
 			Type:   "BUY_LIMIT",
@@ -244,6 +245,57 @@ func TestBridgeDecisionConsumeEndpoint(t *testing.T) {
 	after := getDecision(t, s, "req-consume-endpoint", "")
 	if after.Action != "HOLD" || after.Reason != "no pending decision" {
 		t.Fatalf("expected consumed decision, got: %+v", after)
+	}
+}
+
+func TestSignalContextTimeout(t *testing.T) {
+	s := NewServer("127.0.0.1", 0, func(ctx context.Context, req *SignalRequest) *SignalResponse {
+		select {
+		case <-time.After(500 * time.Millisecond):
+			return &SignalResponse{
+				Action: "PLACE_PENDING",
+				Type:   "BUY_LIMIT",
+				Symbol: req.Symbol,
+				Reason: "unexpected completion",
+			}
+		case <-ctx.Done():
+			return &SignalResponse{
+				Action: "HOLD",
+				Symbol: req.Symbol,
+				Reason: ctx.Err().Error(),
+			}
+		}
+	}, nil, nil)
+	s.signalTimeout = 25 * time.Millisecond
+
+	payload := `{
+		"request_id":"req-timeout",
+		"symbol":"EURUSD",
+		"timeframe":"H1",
+		"bid":1.10000,
+		"ask":1.10020,
+		"spread":2.0,
+		"ohlcv":{"H1":[]},
+		"indicators":{"rsi_14":45.0},
+		"timestamp":"2026-03-02 20:00:00"
+	}`
+
+	sigRec := httptest.NewRecorder()
+	sigReq := httptest.NewRequest(http.MethodPost, "/signal", strings.NewReader(payload))
+	s.handleSignal(sigRec, sigReq)
+	if sigRec.Code != http.StatusOK {
+		t.Fatalf("signal status=%d, want=%d", sigRec.Code, http.StatusOK)
+	}
+
+	decision, ok := waitForDecision(t, s, "req-timeout", "")
+	if !ok {
+		t.Fatal("expected decision to be stored after timeout cancellation")
+	}
+	if decision.Action != "HOLD" {
+		t.Fatalf("decision action=%q, want=HOLD", decision.Action)
+	}
+	if !strings.Contains(decision.Reason, context.DeadlineExceeded.Error()) {
+		t.Fatalf("decision reason=%q, want contains=%q", decision.Reason, context.DeadlineExceeded.Error())
 	}
 }
 

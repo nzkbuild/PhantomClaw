@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/nzkbuild/PhantomClaw/internal/memory"
 )
+
+const defaultSignalHandlerTimeout = 1500 * time.Millisecond
 
 // SignalRequest is the payload sent by MT5 EA on candle close / threshold breach.
 type SignalRequest struct {
@@ -69,7 +72,7 @@ type TradeResultRequest struct {
 
 // SignalHandler is the callback invoked when EA sends a signal.
 // Returns the bot's trading decision. Wired to agent logic in Phase 3.
-type SignalHandler func(req *SignalRequest) *SignalResponse
+type SignalHandler func(ctx context.Context, req *SignalRequest) *SignalResponse
 
 // TradeResultHandler is the callback invoked when EA reports trade closure.
 type TradeResultHandler func(req *TradeResultRequest)
@@ -101,6 +104,7 @@ type Server struct {
 	hasAccountSample bool
 	requestSeq       uint64
 	decisionTTL      time.Duration
+	signalTimeout    time.Duration
 }
 
 // NewServer creates a new bridge server.
@@ -115,6 +119,7 @@ func NewServer(host string, port int, onSignal SignalHandler, onTradeResult Trad
 		pendingBySymbol:  make(map[string]SignalResponse),
 		pendingByRequest: make(map[string]SignalResponse),
 		decisionTTL:      30 * time.Minute,
+		signalTimeout:    defaultSignalHandlerTimeout,
 	}
 
 	mux := http.NewServeMux()
@@ -176,8 +181,11 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 	// Process the signal asynchronously so EA can use a very short timeout.
 	if s.onSignal != nil {
 		reqCopy := req
-		go func(r SignalRequest) {
-			decision := s.onSignal(&r)
+		go func(r SignalRequest, parent context.Context) {
+			ctx, cancel := s.makeSignalContext(parent)
+			defer cancel()
+
+			decision := s.onSignal(ctx, &r)
 			if decision == nil {
 				decision = &SignalResponse{Action: "HOLD", Reason: "no decision", RequestID: r.RequestID}
 			}
@@ -194,7 +202,7 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 			}
 
 			s.storePendingDecision(*decision, symbol)
-		}(reqCopy)
+		}(reqCopy, r.Context())
 	}
 
 	// Immediate ACK (fire-and-forget).
@@ -393,6 +401,29 @@ func (s *Server) storePendingDecision(decision SignalResponse, symbol string) {
 		string(payload),
 		time.Now().Add(s.decisionTTL),
 	)
+}
+
+func (s *Server) makeSignalContext(parent context.Context) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	if parent != nil {
+		base = context.WithoutCancel(parent)
+	}
+
+	timeout := s.signalTimeout
+	if timeout <= 0 {
+		return context.WithCancel(base)
+	}
+
+	if parent != nil {
+		if deadline, ok := parent.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining > 0 && remaining < timeout {
+				timeout = remaining
+			}
+		}
+	}
+
+	return context.WithTimeout(base, timeout)
 }
 
 func (s *Server) nextRequestID(symbol string) string {
