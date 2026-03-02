@@ -22,7 +22,9 @@ phantomclaw
 *.log
 
 # Config with secrets
+config.yaml
 config.local.yaml
+!config.example.yaml
 
 # Environment
 .env

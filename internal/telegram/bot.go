@@ -51,6 +51,7 @@ func New(token string, chatID int64, deps Dependencies) (*Bot, error) {
 	}
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/status", bot.MatchTypePrefix, tb.handleStatus)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypePrefix, tb.handleStart)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/halt", bot.MatchTypePrefix, tb.handleHalt)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/mode", bot.MatchTypePrefix, tb.handleMode)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/report", bot.MatchTypePrefix, tb.handleReport)
@@ -104,6 +105,15 @@ func (tb *Bot) handleStatus(ctx context.Context, b *bot.Bot, update *models.Upda
 		tb.deps.Scheduler.IsWeekend(),
 	)
 
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    update.Message.Chat.ID,
+		Text:      msg,
+		ParseMode: models.ParseModeMarkdown,
+	})
+}
+
+func (tb *Bot) handleStart(ctx context.Context, b *bot.Bot, update *models.Update) {
+	msg := "✅ *PhantomClaw connected*\n\nSend `/status` to check runtime state or `/help` for all commands."
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
 		Text:      msg,

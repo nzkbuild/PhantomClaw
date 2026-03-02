@@ -11,7 +11,7 @@
 //--- Input parameters
 input string BridgeHost = "http://127.0.0.1:8765";  // Go agent REST endpoint
 input int    SignalIntervalSec = 60;                  // Seconds between signal pushes
-input int    RequestTimeoutMs  = 500;                 // WebRequest timeout (ms)
+input int    RequestTimeoutMs  = 500;                 // Short timeout is fine (async ACK design)
 
 //--- Global variables
 datetime g_lastSignalTime = 0;
@@ -41,18 +41,17 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   // 1) Poll and execute latest async decision (if any).
+   PollDecision();
+
+   // 2) Push fresh signal on cadence (fire-and-forget).
    datetime now = TimeCurrent();
    if(now - g_lastSignalTime < SignalIntervalSec) return;
    g_lastSignalTime = now;
 
-   // Build signal payload
+   // Build and send signal payload.
    string payload = BuildSignalPayload();
-   string response = SendToAgent("/signal", payload);
-
-   if(response == "") return;
-
-   // Parse and execute response
-   ProcessResponse(response);
+   PostToAgent("/signal", payload);
 }
 
 //+------------------------------------------------------------------+
@@ -122,7 +121,7 @@ string BuildSignalPayload()
 //+------------------------------------------------------------------+
 //| Send POST request to Go agent                                    |
 //+------------------------------------------------------------------+
-string SendToAgent(string endpoint, string payload)
+string RequestAgent(string method, string endpoint, string payload)
 {
    string url = BridgeHost + endpoint;
    string headers = "Content-Type: application/json\r\n";
@@ -132,10 +131,11 @@ string SendToAgent(string endpoint, string payload)
 
    StringToCharArray(payload, postData, 0, WHOLE_ARRAY, CP_UTF8);
    // Remove null terminator added by StringToCharArray
-   ArrayResize(postData, ArraySize(postData) - 1);
+   if(ArraySize(postData) > 0)
+      ArrayResize(postData, ArraySize(postData) - 1);
 
    int res = WebRequest(
-      "POST",
+      method,
       url,
       headers,
       g_requestTimeout,
@@ -155,6 +155,24 @@ string SendToAgent(string endpoint, string payload)
    }
 
    return CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+}
+
+string PostToAgent(string endpoint, string payload)
+{
+   return RequestAgent("POST", endpoint, payload);
+}
+
+string GetFromAgent(string endpoint)
+{
+   return RequestAgent("GET", endpoint, "");
+}
+
+void PollDecision()
+{
+   string symbol = Symbol();
+   string response = GetFromAgent("/decision?symbol=" + symbol);
+   if(response == "") return;
+   ProcessResponse(response);
 }
 
 //+------------------------------------------------------------------+
@@ -330,7 +348,7 @@ void OnTradeTransaction(
    json += "\"closed_at\":\"" + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS) + "\"";
    json += "}";
 
-   SendToAgent("/trade-result", json);
+   PostToAgent("/trade-result", json);
 }
 
 //+------------------------------------------------------------------+

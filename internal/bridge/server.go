@@ -89,6 +89,7 @@ type Server struct {
 
 	mu               sync.RWMutex
 	latestBySymbol   map[string]SignalRequest
+	pendingBySymbol  map[string]SignalResponse
 	latestAccount    AccountSnapshot
 	hasAccountSample bool
 }
@@ -96,15 +97,17 @@ type Server struct {
 // NewServer creates a new bridge server.
 func NewServer(host string, port int, onSignal SignalHandler, onTradeResult TradeResultHandler) *Server {
 	s := &Server{
-		host:           host,
-		port:           port,
-		onSignal:       onSignal,
-		onTradeResult:  onTradeResult,
-		latestBySymbol: make(map[string]SignalRequest),
+		host:            host,
+		port:            port,
+		onSignal:        onSignal,
+		onTradeResult:   onTradeResult,
+		latestBySymbol:  make(map[string]SignalRequest),
+		pendingBySymbol: make(map[string]SignalResponse),
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /signal", s.handleSignal)
+	mux.HandleFunc("GET /decision", s.handleDecision)
 	mux.HandleFunc("POST /trade-result", s.handleTradeResult)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /price", s.handlePrice)
@@ -114,7 +117,7 @@ func NewServer(host string, port int, onSignal SignalHandler, onTradeResult Trad
 		Addr:         fmt.Sprintf("%s:%d", host, port),
 		Handler:      mux,
 		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 500 * time.Millisecond, // EA has 500ms timeout
+		WriteTimeout: 2 * time.Second, // /signal is async and returns immediate ACK
 		IdleTimeout:  30 * time.Second,
 	}
 
@@ -140,15 +143,6 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default response if no handler or handler returns nil
-	resp := &SignalResponse{Action: "HOLD", Reason: "no decision"}
-
-	if s.onSignal != nil {
-		if decision := s.onSignal(&req); decision != nil {
-			resp = decision
-		}
-	}
-
 	s.mu.Lock()
 	s.latestBySymbol[strings.ToUpper(req.Symbol)] = req
 	s.latestAccount = AccountSnapshot{
@@ -162,8 +156,65 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 	s.hasAccountSample = true
 	s.mu.Unlock()
 
+	// Process the signal asynchronously so EA can use a very short timeout.
+	if s.onSignal != nil {
+		reqCopy := req
+		go func(r SignalRequest) {
+			decision := s.onSignal(&r)
+			if decision == nil {
+				decision = &SignalResponse{Action: "HOLD", Reason: "no decision"}
+			}
+
+			symbol := strings.ToUpper(strings.TrimSpace(r.Symbol))
+			if symbol == "" {
+				symbol = strings.ToUpper(strings.TrimSpace(decision.Symbol))
+			}
+			if symbol == "" {
+				return
+			}
+
+			s.mu.Lock()
+			s.pendingBySymbol[symbol] = *decision
+			s.mu.Unlock()
+		}(reqCopy)
+	}
+
+	// Immediate ACK (fire-and-forget).
+	resp := &SignalResponse{
+		Action: "HOLD",
+		Reason: "accepted_async",
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// handleDecision returns the latest pending decision for a symbol, if available.
+// Decision is consumed once (removed after read).
+func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
+	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
+	if symbol == "" {
+		http.Error(w, `{"error":"symbol is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	s.mu.Lock()
+	decision, ok := s.pendingBySymbol[symbol]
+	if ok {
+		delete(s.pendingBySymbol, symbol)
+	}
+	s.mu.Unlock()
+
+	if !ok {
+		decision = SignalResponse{
+			Action: "HOLD",
+			Reason: "no pending decision",
+			Symbol: symbol,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(decision)
 }
 
 // handleTradeResult processes POST /trade-result from EA.

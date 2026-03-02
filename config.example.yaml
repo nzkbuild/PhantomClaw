@@ -1,0 +1,97 @@
+# PhantomClaw Configuration (Safe Example)
+# ----------------------------------------
+# Keep secrets in environment variables (recommended):
+#   PHANTOM_TELEGRAM_TOKEN
+#   PHANTOM_TELEGRAM_CHAT_ID
+#   PHANTOM_LLM_PROVIDERS_0_API_KEY
+#   PHANTOM_LLM_PROVIDERS_1_API_KEY
+#   PHANTOM_LLM_PROVIDERS_2_API_KEY
+
+bot:
+  name: PhantomClaw
+  mode: OBSERVE
+  timezone: Asia/Kuala_Lumpur
+  log_level: info
+
+telegram:
+  token: ""
+  chat_id: 0
+
+llm:
+  primary: claude
+  aliases:
+    fast: groq
+    cheap: deepseek
+    smart: claude
+    local: ollama
+  providers:
+    - name: claude
+      type: claude
+      api_key: ""
+      model: claude-sonnet-4-20250514
+
+    - name: openai
+      type: openai
+      api_key: ""
+      model: gpt-4o
+
+    - name: deepseek
+      type: openai_compat
+      base_url: "https://api.deepseek.com/v1"
+      api_key: ""
+      model: deepseek-chat
+
+    # - name: groq
+    #   type: openai_compat
+    #   base_url: "https://api.groq.com/openai/v1"
+    #   api_key: ""
+    #   model: llama-3.3-70b-versatile
+
+    # - name: openrouter
+    #   type: openai_compat
+    #   base_url: "https://openrouter.ai/api/v1"
+    #   api_key: ""
+    #   model: anthropic/claude-sonnet-4
+
+    # - name: ollama
+    #   type: openai_compat
+    #   base_url: "http://localhost:11434/v1"
+    #   api_key: "ollama"
+    #   model: qwen3
+
+bridge:
+  host: "127.0.0.1"
+  port: 8765
+
+risk:
+  max_lot_size: 0.10
+  max_daily_loss_usd: 100.0
+  max_open_positions: 3
+  max_drawdown_pct: 10.0
+  suggest_timeout_sec: 180
+  min_trade_interval: "15m"
+  ramp_up_trades: 10
+  ramp_up_lot_pct: 0.50
+
+sessions:
+  tokyo_open: "08:00"
+  pre_london: "14:45"
+  london_open: "15:00"
+  ny_overlap_end: "00:00"
+  learning_start: "00:00"
+  learning_end: "08:00"
+
+memory:
+  db_path: "data/phantom.db"
+  log_dir: "data/logs"
+  sessions_dir: "data/sessions"
+
+heartbeat:
+  enabled: true
+  interval_min: 5
+
+pairs:
+  - XAUUSD
+  - EURUSD
+  - USDJPY
+  - GBPUSD

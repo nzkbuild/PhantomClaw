@@ -87,7 +87,11 @@ $env:PHANTOM_TELEGRAM_CHAT_ID = "your-chat-id-number"
 > 💡 **To make these permanent** (survive restarts), add them to System Environment Variables:
 > Settings → System → About → Advanced system settings → Environment Variables → New
 
-### Step 3: Edit config.yaml (optional)
+### Step 3: Create local config.yaml (recommended)
+
+```powershell
+Copy-Item .\config.example.yaml .\config.yaml
+```
 
 The default settings are safe to start with. But if you want to adjust risk limits:
 
@@ -169,7 +173,9 @@ Everything is controlled through **Telegram**. Just send these commands to your 
 ```
                     You (Telegram)
                          ↕
-   MT5 EA ──signals──→ PhantomClaw Bot ──orders──→ MT5 EA
+   MT5 EA ──signals──→ PhantomClaw Bot
+      ↑                    │
+      └───── decisions ────┘
                          ↕
                     AI (Claude/GPT-4o)
                          ↕
@@ -181,14 +187,12 @@ Everything is controlled through **Telegram**. Just send these commands to your 
 ```
 
 **The loop:**
-1. EA sends candle data + indicators every 60 seconds
-2. Bot builds a prompt with: market data + strategy doc + past lessons + news + sentiment + **today's conversation history**
-3. AI analyzes and can **use tools** (search web, check prices, schedule rechecks)
-4. AI returns: HOLD or PLACE_PENDING (with price, SL, TP)
-5. Bot checks: confidence score → correlation guard → spread filter → risk limits
-6. If all checks pass → sends order back to EA
-7. EA places the pending order in MT5
-8. When order fills and closes → EA reports result → AI writes a lesson
+1. EA pushes signal data every 60 seconds to `/signal` (fast ACK)
+2. Bot processes analysis asynchronously (LLM latency does not block EA request)
+3. Bot stores latest decision per symbol
+4. EA polls `/decision?symbol=...` and executes PLACE/MODIFY/CANCEL/CLOSE actions
+5. Bot still enforces confidence, correlation, spread, and risk guards before storing decision
+6. When a trade closes, EA posts `/trade-result` and the bot writes lessons
 
 ### 🔧 Agent Tools
 
@@ -249,7 +253,8 @@ PhantomClaw has multiple layers of protection — **the AI cannot override these
 
 ## 🔧 Configuration
 
-All settings are in `config.yaml`. You can also override any setting with environment variables using the `PHANTOM_` prefix.
+Use `config.example.yaml` as the tracked template and keep your real `config.yaml` local (ignored by git).  
+You can override any setting with environment variables using the `PHANTOM_` prefix.
 
 **Examples:**
 ```powershell
@@ -266,7 +271,8 @@ $env:PHANTOM_RISK_MAX_DAILY_LOSS_USD = "50"
 ```
 PhantomClaw/
 ├── phantomclaw.exe          ← The bot (after you build it)
-├── config.yaml              ← Your settings (providers, risk, sessions)
+├── config.example.yaml      ← Safe template (tracked)
+├── config.yaml              ← Your local settings (gitignored)
 ├── V2_BLUEPRINT.md          ← V2 upgrade roadmap
 ├── ea/
 │   └── PhantomClaw.mq5      ← MT5 Expert Advisor (copy to MT5)
@@ -303,13 +309,13 @@ PhantomClaw/
 ## ❓ Troubleshooting
 
 ### "agent brain not configured"
-→ You haven't set any AI API key. Set `PHANTOM_LLM_CLAUDE_API_KEY` (or another provider).
+→ You haven't set any provider key. Set `PHANTOM_LLM_PROVIDERS_0_API_KEY` (or another configured provider index).
 
 ### MT5 EA shows "WebRequest error 4014"
 → You need to allow the URL in MT5: Tools → Options → Expert Advisors → Allow WebRequest → Add `http://127.0.0.1:8765`
 
 ### Bot doesn't respond on Telegram
-→ Check your `PHANTOM_TELEGRAM_TOKEN` and `PHANTOM_TELEGRAM_CHAT_ID` are correct. Send `/start` to your bot first.
+→ Check your `PHANTOM_TELEGRAM_TOKEN` and `PHANTOM_TELEGRAM_CHAT_ID`, send `/start`, then test `/help` and `/status`.
 
 ### "CGO_ENABLED" build error
 → Install [TDM-GCC](https://jmeubank.github.io/tdm-gcc/) (64-bit). This is needed for the SQLite database.
