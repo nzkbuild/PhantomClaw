@@ -359,5 +359,13 @@ func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update
 }
 
 func (tb *Bot) handleUnknown(ctx context.Context, b *bot.Bot, update *models.Update) {
-	// Silently ignore non-command messages
+	if update.Message == nil {
+		return
+	}
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    update.Message.Chat.ID,
+		Text:      "🤖 Bot is online. Use `/help` to see available commands.",
+		ParseMode: models.ParseModeMarkdown,
+	})
 }
