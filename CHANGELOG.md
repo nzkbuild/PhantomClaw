@@ -32,6 +32,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Bridge signal callbacks now run with bounded request-scoped context and propagate `ctx` into `brain.HandleSignal`
 - Bridge `/trade-result` now validates that `entry` is present and `> 0` before processing
 - EA trade-result payload now includes resolved weighted entry price from position history
+- Documentation synced for v3 Phase A completion status and bridge protocol contract details
 
 ## [2.0.0] - 2026-03-02
 

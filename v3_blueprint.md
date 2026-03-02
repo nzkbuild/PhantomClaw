@@ -8,6 +8,16 @@
 
 Detailed implementation plan: `docs/plans/2026-03-02-v3-foundation.md`
 
+Progress source of truth (done/next): `docs/plans/2026-03-02-v3-foundation.md`
+
+---
+
+## Current Status (2026-03-02)
+
+- Phase A reliability scope is completed.
+- Implemented in code: issues `#2 #3 #4 #5 #8 #9 #10 #13 #14 #17 #23`.
+- Next execution focus: Phase B (`#11 #12 #18 #19 #20 #21 #22 #7 #25 #27`).
+
 ---
 
 ## Where We Stand Today
@@ -152,12 +162,12 @@ TARGET (v3):
 ## Phase Plan
 
 ### Phase A — P0 Reliability (must-fix before new features)
-- [ ] Implement issues #2, #3, #4, #5 (bridge correlation + durability)
-- [ ] Implement issues #8, #9, #10 (risk-state correctness)
-- [ ] Implement issue #13 (real session alerts)
-- [ ] Implement issue #14 (Telegram inbound ACL)
-- [ ] Implement issue #17 (request-scoped context deadlines)
-- [ ] Implement issue #23 (EA trade-result `entry`)
+- [x] Implement issues #2, #3, #4, #5 (bridge correlation + durability)
+- [x] Implement issues #8, #9, #10 (risk-state correctness)
+- [x] Implement issue #13 (real session alerts)
+- [x] Implement issue #14 (Telegram inbound ACL)
+- [x] Implement issue #17 (request-scoped context deadlines)
+- [x] Implement issue #23 (EA trade-result `entry`)
 
 **Exit criteria:**
 - No decision loss on restart

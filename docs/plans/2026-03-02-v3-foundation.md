@@ -21,6 +21,7 @@
 - 2026-03-02: Task 7 completed (session alert callback now dispatches to Telegram sender; covered with unit tests).
 - 2026-03-02: Task 8 completed (request-scoped signal context with bounded timeout propagated to agent signal handler + timeout test).
 - 2026-03-02: Task 9 completed (EA trade-result now sends resolved entry price; bridge validates `entry > 0`; trade-result entry contract tests added).
+- 2026-03-02: Task 10 completed (v3 blueprint, README, and changelog synced to reflect completed Phase A reliability scope and protocol contracts).
 
 ---
 

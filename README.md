@@ -195,7 +195,14 @@ Only the configured `telegram.chat_id` is authorized to control the bot.
 4. EA polls `/decision?request_id=...&symbol=...&consume=1` and executes PLACE/MODIFY/CANCEL/CLOSE actions
 5. Optional explicit consume API is available: `POST /decision/consume?request_id=...`
 6. Bot reconciles live account snapshot (equity + open positions) before risk checks, applies true drawdown (peak-to-current) gating, then enforces confidence/correlation/spread/risk guards
-7. When a trade closes, EA posts `/trade-result` and the bot writes lessons
+7. When a trade closes, EA posts `/trade-result` with `entry` and `exit`, and the bot writes lessons
+
+### Bridge Protocol Notes (v3)
+
+- `request_id`: each `/signal` request is correlated to `/decision` polling for deterministic matching.
+- decision lifecycle: `pending -> delivered -> consumed|expired` (with `consume=1` or `POST /decision/consume`).
+- Telegram ACL: only configured `telegram.chat_id` is authorized for inbound command handling.
+- Trade-result contract: `/trade-result` requires `entry > 0` and rejects invalid payloads.
 
 ### 🔧 Agent Tools
 
