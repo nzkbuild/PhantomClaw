@@ -3,6 +3,7 @@ package bridge
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -296,6 +297,68 @@ func TestSignalContextTimeout(t *testing.T) {
 	}
 	if !strings.Contains(decision.Reason, context.DeadlineExceeded.Error()) {
 		t.Fatalf("decision reason=%q, want contains=%q", decision.Reason, context.DeadlineExceeded.Error())
+	}
+}
+
+func TestTradeResultIncludesEntry(t *testing.T) {
+	got := make(chan TradeResultRequest, 1)
+	s := NewServer("127.0.0.1", 0, nil, func(req *TradeResultRequest) {
+		got <- *req
+	}, nil)
+
+	payload := `{
+		"ticket":12345,
+		"symbol":"EURUSD",
+		"direction":"BUY",
+		"entry":1.10234,
+		"exit":1.10400,
+		"lot":0.10,
+		"pnl":16.6,
+		"closed_at":"2026-03-02 21:00:00"
+	}`
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/trade-result", strings.NewReader(payload))
+	s.handleTradeResult(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("trade-result status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	select {
+	case tr := <-got:
+		if math.Abs(tr.Entry-1.10234) > 1e-9 {
+			t.Fatalf("entry=%f, want=1.10234", tr.Entry)
+		}
+	default:
+		t.Fatal("expected trade-result callback to be invoked")
+	}
+}
+
+func TestTradeResultRejectsMissingEntry(t *testing.T) {
+	called := false
+	s := NewServer("127.0.0.1", 0, nil, func(req *TradeResultRequest) {
+		called = true
+	}, nil)
+
+	payload := `{
+		"ticket":12345,
+		"symbol":"EURUSD",
+		"direction":"BUY",
+		"exit":1.10400,
+		"lot":0.10,
+		"pnl":16.6,
+		"closed_at":"2026-03-02 21:00:00"
+	}`
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/trade-result", strings.NewReader(payload))
+	s.handleTradeResult(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("trade-result status=%d, want=%d", rec.Code, http.StatusBadRequest)
+	}
+	if called {
+		t.Fatal("trade-result callback should not be called for invalid payload")
 	}
 }
 

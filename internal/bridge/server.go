@@ -441,6 +441,10 @@ func (s *Server) handleTradeResult(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid payload"}`, http.StatusBadRequest)
 		return
 	}
+	if req.Entry <= 0 {
+		http.Error(w, `{"error":"entry is required and must be > 0"}`, http.StatusBadRequest)
+		return
+	}
 
 	if s.onTradeResult != nil {
 		s.onTradeResult(&req)

@@ -321,6 +321,41 @@ void ClosePosition(long ticket)
 }
 
 //+------------------------------------------------------------------+
+//| Resolve weighted entry price for a closed position               |
+//+------------------------------------------------------------------+
+double ResolveEntryPrice(const ulong positionId, const string symbol)
+{
+   if(positionId == 0) return 0.0;
+   if(!HistorySelect(0, TimeCurrent())) return 0.0;
+
+   double weightedPrice = 0.0;
+   double totalVolume = 0.0;
+   int deals = HistoryDealsTotal();
+
+   for(int i = 0; i < deals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+
+      if((ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID) != positionId) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != symbol) continue;
+
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry != DEAL_ENTRY_IN && dealEntry != DEAL_ENTRY_INOUT) continue;
+
+      double dealVolume = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+      double dealPrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+      if(dealVolume <= 0.0 || dealPrice <= 0.0) continue;
+
+      weightedPrice += dealPrice * dealVolume;
+      totalVolume += dealVolume;
+   }
+
+   if(totalVolume <= 0.0) return 0.0;
+   return weightedPrice / totalVolume;
+}
+
+//+------------------------------------------------------------------+
 //| Trade transaction handler — push results to agent                |
 //+------------------------------------------------------------------+
 void OnTradeTransaction(
@@ -342,14 +377,22 @@ void OnTradeTransaction(
    double volume = HistoryDealGetDouble(trans.deal, DEAL_VOLUME);
    double pnl    = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
    long   entry  = HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+   ulong  positionId = (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
 
    // Only report closes (DEAL_ENTRY_OUT)
    if(entry != DEAL_ENTRY_OUT) return;
+   double entryPrice = ResolveEntryPrice(positionId, symbol);
+   if(entryPrice <= 0.0)
+   {
+      Print("PhantomClaw: Could not resolve entry price for position ", positionId, " on ", symbol);
+      return;
+   }
 
    string json = "{";
    json += "\"ticket\":" + IntegerToString(trans.deal) + ",";
    json += "\"symbol\":\"" + symbol + "\",";
    json += "\"direction\":\"" + ((HistoryDealGetInteger(trans.deal, DEAL_TYPE) == DEAL_TYPE_BUY) ? "SELL" : "BUY") + "\",";
+   json += "\"entry\":" + DoubleToString(entryPrice, 5) + ",";
    json += "\"exit\":" + DoubleToString(price, 5) + ",";
    json += "\"lot\":" + DoubleToString(volume, 2) + ",";
    json += "\"pnl\":" + DoubleToString(pnl, 2) + ",";

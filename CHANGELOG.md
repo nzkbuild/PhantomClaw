@@ -17,6 +17,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Telegram ACL unit tests for configured/mismatched chat and nil payload handling
 - `makeSessionAlertSender` helper + unit tests for session alert dispatch
 - Bridge signal context timeout test (`TestSignalContextTimeout`)
+- Trade-result contract tests for mandatory `entry` (`TestTradeResultIncludesEntry`, `TestTradeResultRejectsMissingEntry`)
 
 ### Changed
 - EA now attaches `request_id` in signal payloads and includes it when polling `/decision`
@@ -29,6 +30,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Telegram command handlers now enforce inbound `chat_id` authorization
 - Session alerts now send through Telegram bot callback instead of log-only side effects
 - Bridge signal callbacks now run with bounded request-scoped context and propagate `ctx` into `brain.HandleSignal`
+- Bridge `/trade-result` now validates that `entry` is present and `> 0` before processing
+- EA trade-result payload now includes resolved weighted entry price from position history
 
 ## [2.0.0] - 2026-03-02
 
