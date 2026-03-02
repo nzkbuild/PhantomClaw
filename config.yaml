@@ -5,7 +5,7 @@
 
 bot:
   name: PhantomClaw
-  mode: AUTO                    # OBSERVE | SUGGEST | AUTO | HALT
+  mode: OBSERVE                    # OBSERVE | SUGGEST | AUTO | HALT
   timezone: Asia/Kuala_Lumpur   # MYT = UTC+8
   log_level: info               # debug | info | warn | error
 
