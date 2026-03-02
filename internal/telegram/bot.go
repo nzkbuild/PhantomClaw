@@ -33,6 +33,14 @@ type Bot struct {
 	deps   Dependencies
 }
 
+func logInbound(command string, update *models.Update) {
+	if update == nil || update.Message == nil {
+		log.Printf("telegram: inbound %s (no message payload)", command)
+		return
+	}
+	log.Printf("telegram: inbound %s chat_id=%d user_id=%d text=%q", command, update.Message.Chat.ID, update.Message.From.ID, update.Message.Text)
+}
+
 // New creates a Telegram bot listener.
 func New(token string, chatID int64, deps Dependencies) (*Bot, error) {
 	if token == "" {
@@ -87,6 +95,7 @@ func (tb *Bot) Send(ctx context.Context, text string) {
 // --- Command Handlers ---
 
 func (tb *Bot) handleStatus(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/status", update)
 	stats := tb.deps.Risk.Stats()
 	session := tb.deps.Scheduler.CurrentSession()
 
@@ -113,6 +122,7 @@ func (tb *Bot) handleStatus(ctx context.Context, b *bot.Bot, update *models.Upda
 }
 
 func (tb *Bot) handleStart(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/start", update)
 	msg := "✅ *PhantomClaw connected*\n\nSend `/status` to check runtime state or `/help` for all commands."
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
@@ -122,6 +132,7 @@ func (tb *Bot) handleStart(ctx context.Context, b *bot.Bot, update *models.Updat
 }
 
 func (tb *Bot) handleHalt(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/halt", update)
 	tb.deps.Safety.SetMode(safety.ModeHalt)
 	tb.deps.Risk.SetHalted(true)
 
@@ -133,6 +144,7 @@ func (tb *Bot) handleHalt(ctx context.Context, b *bot.Bot, update *models.Update
 }
 
 func (tb *Bot) handleMode(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/mode", update)
 	parts := strings.Fields(update.Message.Text)
 	if len(parts) < 2 {
 		b.SendMessage(ctx, &bot.SendMessageParams{
@@ -167,6 +179,7 @@ func (tb *Bot) handleMode(ctx context.Context, b *bot.Bot, update *models.Update
 }
 
 func (tb *Bot) handleReport(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/report", update)
 	stats := tb.deps.Risk.Stats()
 
 	var diaryText string
@@ -205,6 +218,7 @@ func (tb *Bot) handleReport(ctx context.Context, b *bot.Bot, update *models.Upda
 }
 
 func (tb *Bot) handlePairs(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/pairs", update)
 	var msg strings.Builder
 	msg.WriteString("📈 *Active Pairs*\n\n")
 
@@ -239,6 +253,7 @@ func (tb *Bot) handlePairs(ctx context.Context, b *bot.Bot, update *models.Updat
 }
 
 func (tb *Bot) handlePending(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/pending", update)
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
 		Text:      "📋 *Pending Orders*\n\n_Pending orders are managed by the EA. Check MT5 terminal for live status._",
@@ -247,6 +262,7 @@ func (tb *Bot) handlePending(ctx context.Context, b *bot.Bot, update *models.Upd
 }
 
 func (tb *Bot) handleConfidence(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/confidence", update)
 	conf := skills.ScoreConfidence(skills.ConfidenceInput{
 		Session: string(tb.deps.Scheduler.CurrentSession()),
 	})
@@ -267,6 +283,7 @@ func (tb *Bot) handleConfidence(ctx context.Context, b *bot.Bot, update *models.
 }
 
 func (tb *Bot) handleConfig(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/config", update)
 	stats := tb.deps.Risk.Stats()
 	msg := fmt.Sprintf("⚙️ *Risk Config*\n\n"+
 		"Max Open Positions: %d\n"+
@@ -285,6 +302,7 @@ func (tb *Bot) handleConfig(ctx context.Context, b *bot.Bot, update *models.Upda
 }
 
 func (tb *Bot) handleRollback(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/rollback", update)
 	if tb.deps.Strategy == nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -339,6 +357,7 @@ func (tb *Bot) handleRollback(ctx context.Context, b *bot.Bot, update *models.Up
 }
 
 func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/help", update)
 	msg := "🤖 *PhantomClaw Commands*\n\n" +
 		"`/status` — Mode, positions, PnL, session\n" +
 		"`/mode observe|suggest|auto|halt` — Switch mode\n" +
@@ -359,6 +378,7 @@ func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update
 }
 
 func (tb *Bot) handleUnknown(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("unknown", update)
 	if update.Message == nil {
 		return
 	}
