@@ -32,6 +32,7 @@ type Agent struct {
 	safety    *safety.Manager
 	scheduler *scheduler.Scheduler
 	pairs     []string
+	sessions  *memory.SessionStore
 
 	// Phase 3 integrations
 	correlation *skills.CorrelationGuard
@@ -53,6 +54,7 @@ type Deps struct {
 	Safety      *safety.Manager
 	Scheduler   *scheduler.Scheduler
 	Pairs       []string
+	Sessions    *memory.SessionStore
 	Correlation *skills.CorrelationGuard
 	Spread      *skills.SpreadFilter
 	News        *market.NewsFetcher
@@ -73,6 +75,7 @@ func New(d Deps) *Agent {
 		safety:      d.Safety,
 		scheduler:   d.Scheduler,
 		pairs:       d.Pairs,
+		sessions:    d.Sessions,
 		correlation: d.Correlation,
 		spread:      d.Spread,
 		news:        d.News,
@@ -99,6 +102,15 @@ func (a *Agent) HandleSignal(ctx context.Context, req *bridge.SignalRequest) *br
 	// Gate 3: Record spread for filtering
 	if a.spread != nil {
 		a.spread.Record(req.Symbol, req.Spread)
+	}
+
+	// Save inbound signal turn
+	if a.sessions != nil {
+		a.sessions.Append(memory.Turn{
+			Pair:    req.Symbol,
+			Role:    "user",
+			Content: fmt.Sprintf("%s signal: bid=%.5f ask=%.5f spread=%.1f", req.Symbol, req.Bid, req.Ask, req.Spread),
+		})
 	}
 
 	// Build context-injected prompt
@@ -147,7 +159,19 @@ func (a *Agent) HandleSignal(ctx context.Context, req *bridge.SignalRequest) *br
 		return &bridge.SignalResponse{Action: "HOLD", Reason: "agent: no decision after max rounds"}
 	}
 
-	return a.parseDecision(finalDecision, req)
+	resp := a.parseDecision(finalDecision, req)
+
+	// Save agent decision turn
+	if a.sessions != nil {
+		a.sessions.Append(memory.Turn{
+			Pair:     req.Symbol,
+			Role:     "assistant",
+			Content:  resp.Reason,
+			Decision: resp.Action,
+		})
+	}
+
+	return resp
 }
 
 // promptContext holds the assembled prompt pieces.
@@ -165,7 +189,17 @@ func (a *Agent) buildPrompt(req *bridge.SignalRequest) promptContext {
 	sb.WriteString("You analyze market data and decide whether to place pending orders.\n")
 	sb.WriteString("You MUST respond with a JSON decision.\n\n")
 
-	// 2. Master strategy (if exists)
+	// 2. Tool documentation (human-readable)
+	toolDefs := a.buildToolDefs()
+	if len(toolDefs) > 0 {
+		sb.WriteString("## Available Tools\n")
+		for _, t := range toolDefs {
+			sb.WriteString(fmt.Sprintf("- **%s**: %s\n", t.Name, t.Description))
+		}
+		sb.WriteString("\nUse tools to gather data before making your decision.\n\n")
+	}
+
+	// 3. Master strategy (if exists)
 	if a.strategy != nil {
 		strat, version, _ := a.strategy.GetCurrentStrategy()
 		if strat != "" {
@@ -196,7 +230,22 @@ func (a *Agent) buildPrompt(req *bridge.SignalRequest) promptContext {
 		sb.WriteString("\n\n")
 	}
 
-	// 5. Echo recall — past lessons (use full EchoRecall if available)
+	// 5. Conversation history (today's recent decisions for this pair)
+	if a.sessions != nil {
+		turns, _ := a.sessions.LoadForPair(req.Symbol, 5)
+		if len(turns) > 0 {
+			sb.WriteString("## Recent Decisions (today)\n")
+			for _, t := range turns {
+				if t.Role == "assistant" {
+					sb.WriteString(fmt.Sprintf("[%s] %s → %s: %s\n",
+						t.Timestamp.Format("15:04"), t.Pair, t.Decision, t.Content))
+				}
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	// 6. Echo recall — past lessons (use full EchoRecall if available)
 	echoText := a.loadEchoRecall(req.Symbol)
 	if echoText != "" {
 		sb.WriteString("## Past Lessons (Echo Recall)\n")

@@ -10,14 +10,21 @@ import (
 
 // Config holds all PhantomClaw configuration.
 type Config struct {
-	Bot      BotConfig      `mapstructure:"bot"`
-	Telegram TelegramConfig `mapstructure:"telegram"`
-	LLM      LLMConfig      `mapstructure:"llm"`
-	Bridge   BridgeConfig   `mapstructure:"bridge"`
-	Risk     RiskConfig     `mapstructure:"risk"`
-	Sessions SessionConfig  `mapstructure:"sessions"`
-	Memory   MemoryConfig   `mapstructure:"memory"`
-	Pairs    []string       `mapstructure:"pairs"`
+	Bot       BotConfig       `mapstructure:"bot"`
+	Telegram  TelegramConfig  `mapstructure:"telegram"`
+	LLM       LLMConfig       `mapstructure:"llm"`
+	Bridge    BridgeConfig    `mapstructure:"bridge"`
+	Risk      RiskConfig      `mapstructure:"risk"`
+	Sessions  SessionConfig   `mapstructure:"sessions"`
+	Memory    MemoryConfig    `mapstructure:"memory"`
+	Heartbeat HeartbeatConfig `mapstructure:"heartbeat"`
+	Pairs     []string        `mapstructure:"pairs"`
+}
+
+// HeartbeatConfig holds periodic health check settings.
+type HeartbeatConfig struct {
+	Enabled     bool `mapstructure:"enabled"`
+	IntervalMin int  `mapstructure:"interval_min"`
 }
 
 // BotConfig holds general bot settings.
@@ -89,8 +96,9 @@ type SessionConfig struct {
 
 // MemoryConfig holds SQLite database settings.
 type MemoryConfig struct {
-	DBPath string `mapstructure:"db_path"`
-	LogDir string `mapstructure:"log_dir"`
+	DBPath      string `mapstructure:"db_path"`
+	LogDir      string `mapstructure:"log_dir"`
+	SessionsDir string `mapstructure:"sessions_dir"`
 }
 
 // Load reads configuration from file and environment variables.

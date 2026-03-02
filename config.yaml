@@ -87,6 +87,11 @@ sessions:
 memory:
   db_path: "data/phantom.db"
   log_dir: "data/logs"
+  sessions_dir: "data/sessions"  # JSONL conversation history
+
+heartbeat:
+  enabled: true
+  interval_min: 5               # health check every 5 minutes
 
 pairs:
   - XAUUSD

@@ -21,10 +21,12 @@ const (
 
 // Callbacks holds the functions triggered at each session transition.
 type Callbacks struct {
-	OnTokyoOpen  func() // 08:00 MYT — start data collection
-	OnPreLondon  func() // 14:45 MYT — telegram alert
-	OnLondonOpen func() // 15:00 MYT — trading mode starts
-	OnHardStop   func() // 00:00 MYT — end of day, cancel pending, reset
+	OnTokyoOpen     func() // 08:00 MYT — start data collection
+	OnPreLondon     func() // 14:45 MYT — telegram alert
+	OnLondonOpen    func() // 15:00 MYT — trading mode starts
+	OnHardStop      func() // 00:00 MYT — end of day, cancel pending, reset
+	OnMorningScan   func() // 08:30 MYT — scan all pairs for the day
+	OnPositionCheck func() // every N min during trading — check open positions
 }
 
 // Scheduler manages MYT session windows and triggers callbacks (PRD §6).
@@ -79,6 +81,22 @@ func New(cfg config.SessionConfig, tz string, cb Callbacks) (*Scheduler, error) 
 		log.Printf("scheduler: registered hard_stop at %s MYT", cfg.NYOverlapEnd)
 	}
 
+	// 08:30 MYT — Morning scan
+	if cb.OnMorningScan != nil {
+		if _, err := c.AddFunc("30 8 * * 1-5", cb.OnMorningScan); err != nil {
+			return nil, fmt.Errorf("scheduler: add morning_scan: %w", err)
+		}
+		log.Println("scheduler: registered morning_scan at 08:30 MYT")
+	}
+
+	// Position check — every 30 min during trading (15:00-00:00 weekdays)
+	if cb.OnPositionCheck != nil {
+		if _, err := c.AddFunc("*/30 15-23 * * 1-5", cb.OnPositionCheck); err != nil {
+			return nil, fmt.Errorf("scheduler: add position_check: %w", err)
+		}
+		log.Println("scheduler: registered position_check every 30 min (15:00-23:59 MYT)")
+	}
+
 	return &Scheduler{
 		cron:     c,
 		location: loc,
@@ -95,6 +113,22 @@ func (s *Scheduler) Start() {
 // Stop gracefully shuts down the scheduler.
 func (s *Scheduler) Stop() {
 	s.cron.Stop()
+}
+
+// AddDynamic adds a one-shot or recurring cron job at runtime. Returns the job ID.
+func (s *Scheduler) AddDynamic(name string, spec string, fn func()) (cron.EntryID, error) {
+	id, err := s.cron.AddFunc(spec, fn)
+	if err != nil {
+		return 0, fmt.Errorf("scheduler: add dynamic '%s': %w", name, err)
+	}
+	log.Printf("scheduler: dynamic job '%s' added (id=%d, spec=%s)", name, id, spec)
+	return id, nil
+}
+
+// RemoveDynamic removes a previously added dynamic cron job.
+func (s *Scheduler) RemoveDynamic(id cron.EntryID) {
+	s.cron.Remove(id)
+	log.Printf("scheduler: dynamic job removed (id=%d)", id)
 }
 
 // CurrentSession returns which session is active based on current MYT time.
