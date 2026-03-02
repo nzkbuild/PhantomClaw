@@ -254,8 +254,8 @@ func (r *Router) isCoolingDownLocked(provider string) bool {
 		return false
 	}
 	if time.Now().After(expiry) {
-		// Cooldown expired — provider recovers automatically
-		delete(r.cooldowns, provider)
+		// Cooldown expired — provider recovers automatically.
+		// Keep this read-only because callers may hold RLock.
 		return false
 	}
 	return true

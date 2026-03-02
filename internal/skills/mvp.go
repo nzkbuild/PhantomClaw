@@ -6,16 +6,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
+	"time"
 )
 
 // RegisterMVPSkills registers the Phase 1 MVP skills into the registry.
 // bridgeURL is "http://127.0.0.1:8765" (the MT5 EA bridge).
 // cronDeps is optional — if provided, registers the cron_add tool.
 func RegisterMVPSkills(r *Registry, bridgeURL string, cronDeps *CronDeps) {
-	r.Register(getPriceSkill())
+	r.Register(getPriceSkill(bridgeURL))
 	r.Register(placePendingSkill(bridgeURL))
 	r.Register(cancelPendingSkill(bridgeURL))
-	r.Register(getAccountInfoSkill())
+	r.Register(getAccountInfoSkill(bridgeURL))
 
 	// Phase C tools
 	if cronDeps != nil {
@@ -27,7 +30,7 @@ func RegisterMVPSkills(r *Registry, bridgeURL string, cronDeps *CronDeps) {
 
 // --- get_price ---
 
-func getPriceSkill() *Skill {
+func getPriceSkill(bridgeURL string) *Skill {
 	return &Skill{
 		Name:        "get_price",
 		Description: "Get current bid/ask price and spread for a trading symbol",
@@ -48,8 +51,24 @@ func getPriceSkill() *Skill {
 			if err := json.Unmarshal(args, &p); err != nil {
 				return "", fmt.Errorf("get_price: invalid args: %w", err)
 			}
-			// Stub — will be wired to bridge in production
-			return fmt.Sprintf(`{"symbol":"%s","bid":0,"ask":0,"spread":0,"source":"stub"}`, p.Symbol), nil
+			symbol := strings.ToUpper(strings.TrimSpace(p.Symbol))
+			if symbol == "" {
+				return `{"error":"symbol is required"}`, nil
+			}
+
+			reqURL := fmt.Sprintf("%s/price?symbol=%s", bridgeURL, url.QueryEscape(symbol))
+			client := &http.Client{Timeout: 2 * time.Second}
+			resp, err := client.Get(reqURL)
+			if err != nil {
+				return "", fmt.Errorf("get_price: bridge error: %w", err)
+			}
+			defer resp.Body.Close()
+
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				return "", fmt.Errorf("get_price: bridge status %d: %s", resp.StatusCode, string(body))
+			}
+			return string(body), nil
 		},
 	}
 }
@@ -147,7 +166,7 @@ func cancelPendingSkill(bridgeURL string) *Skill {
 
 // --- get_account_info ---
 
-func getAccountInfoSkill() *Skill {
+func getAccountInfoSkill(bridgeURL string) *Skill {
 	return &Skill{
 		Name:        "get_account_info",
 		Description: "Get MT5 account balance, equity, and open positions",
@@ -156,8 +175,18 @@ func getAccountInfoSkill() *Skill {
 			"properties": map[string]any{},
 		},
 		Execute: func(args json.RawMessage) (string, error) {
-			// Stub — will be wired to bridge in production
-			return `{"balance":0,"equity":0,"open_positions":0,"source":"stub"}`, nil
+			client := &http.Client{Timeout: 2 * time.Second}
+			resp, err := client.Get(bridgeURL + "/account")
+			if err != nil {
+				return "", fmt.Errorf("get_account_info: bridge error: %w", err)
+			}
+			defer resp.Body.Close()
+
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				return "", fmt.Errorf("get_account_info: bridge status %d: %s", resp.StatusCode, string(body))
+			}
+			return string(body), nil
 		},
 	}
 }

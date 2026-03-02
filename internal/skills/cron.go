@@ -77,28 +77,19 @@ func CronAddSkill(deps CronDeps) *Skill {
 			// Schedule one-shot wake-up
 			wakeAt := time.Now().Add(time.Duration(p.DelayMinutes) * time.Minute)
 			jobName := fmt.Sprintf("recheck_%s_%s", p.Pair, wakeAt.Format("15:04"))
-
-			// Use a one-shot: schedule, fire, decrement counter
 			pair := p.Pair
 			reason := p.Reason
-			_, err := deps.Scheduler.AddDynamic(jobName,
-				fmt.Sprintf("@every %dm", p.DelayMinutes),
-				func() {
-					log.Printf("cron_add: firing recheck for %s — %s", pair, reason)
-					if deps.OnWake != nil {
-						deps.OnWake(pair, reason)
-					}
-					tracker.mu.Lock()
-					tracker.count--
-					tracker.mu.Unlock()
-				},
-			)
-			if err != nil {
+
+			// One-shot timer: fire once after N minutes.
+			time.AfterFunc(time.Duration(p.DelayMinutes)*time.Minute, func() {
+				log.Printf("cron_add: firing recheck for %s — %s", pair, reason)
+				if deps.OnWake != nil {
+					deps.OnWake(pair, reason)
+				}
 				tracker.mu.Lock()
 				tracker.count--
 				tracker.mu.Unlock()
-				return "", fmt.Errorf("cron_add: schedule error: %w", err)
-			}
+			})
 
 			result := map[string]any{
 				"status":   "scheduled",

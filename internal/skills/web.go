@@ -3,6 +3,7 @@ package skills
 import (
 	"encoding/json"
 	"fmt"
+	htmlstd "html"
 	"io"
 	"net/http"
 	"net/url"
@@ -118,11 +119,10 @@ func webFetchSkill() *Skill {
 // --- HTML parsing helpers ---
 
 var (
-	reTitle   = regexp.MustCompile(`<a[^>]*class="result__a"[^>]*>(.*?)</a>`)
-	reSnippet = regexp.MustCompile(`<a[^>]*class="result__snippet"[^>]*>(.*?)</a>`)
-	reHref    = regexp.MustCompile(`href="([^"]*)"`)
-	reTags    = regexp.MustCompile(`<[^>]*>`)
-	reSpaces  = regexp.MustCompile(`\s+`)
+	reAnchor = regexp.MustCompile(`(?is)<a\b([^>]*)>(.*?)</a>`)
+	reHref   = regexp.MustCompile(`(?is)\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))`)
+	reTags   = regexp.MustCompile(`<[^>]*>`)
+	reSpaces = regexp.MustCompile(`\s+`)
 )
 
 type searchResult struct {
@@ -133,30 +133,39 @@ type searchResult struct {
 
 func parseDDGResults(html string, max int) []searchResult {
 	var results []searchResult
+	seen := make(map[string]struct{})
+	matches := reAnchor.FindAllStringSubmatchIndex(html, -1)
 
-	titles := reTitle.FindAllStringSubmatch(html, max*2)
-	snippets := reSnippet.FindAllStringSubmatch(html, max*2)
-
-	for i := 0; i < len(titles) && i < max; i++ {
-		title := stripTags(titles[i][1])
-		snippet := ""
-		if i < len(snippets) {
-			snippet = stripTags(snippets[i][1])
+	for _, m := range matches {
+		if len(results) >= max {
+			break
+		}
+		// Match index layout:
+		// 0,1 = full anchor; 2,3 = attrs; 4,5 = inner HTML
+		if len(m) < 6 {
+			continue
 		}
 
-		// Extract URL from the title link
-		linkURL := ""
-		if match := reHref.FindStringSubmatch(titles[i][0]); len(match) > 1 {
-			linkURL = match[1]
-			// DDG wraps URLs — extract actual URL if present
-			if idx := strings.Index(linkURL, "uddg="); idx >= 0 {
-				decoded, err := url.QueryUnescape(linkURL[idx+5:])
-				if err == nil {
-					linkURL = decoded
-				}
-			}
+		attrs := html[m[2]:m[3]]
+		rawTitle := html[m[4]:m[5]]
+
+		href := extractHref(attrs)
+		linkURL := normalizeDDGURL(href)
+		if !isLikelyResultURL(linkURL) {
+			continue
 		}
 
+		title := stripTags(rawTitle)
+		if title == "" || isLikelyNavTitle(title) {
+			continue
+		}
+
+		if _, exists := seen[linkURL]; exists {
+			continue
+		}
+		seen[linkURL] = struct{}{}
+
+		snippet := extractSnippetAfterAnchor(html, m[1], title)
 		results = append(results, searchResult{
 			Title:   title,
 			Snippet: snippet,
@@ -164,6 +173,92 @@ func parseDDGResults(html string, max int) []searchResult {
 		})
 	}
 	return results
+}
+
+func extractHref(attrs string) string {
+	match := reHref.FindStringSubmatch(attrs)
+	if len(match) < 2 {
+		return ""
+	}
+	for i := 1; i < len(match); i++ {
+		if match[i] != "" {
+			return htmlstd.UnescapeString(strings.TrimSpace(match[i]))
+		}
+	}
+	return ""
+}
+
+func normalizeDDGURL(href string) string {
+	if href == "" {
+		return ""
+	}
+
+	// DDG redirect style: /l/?kh=-1&uddg=<encoded-url>
+	if strings.Contains(href, "uddg=") {
+		u, err := url.Parse(href)
+		if err == nil {
+			uddg := u.Query().Get("uddg")
+			if uddg != "" {
+				decoded, decErr := url.QueryUnescape(uddg)
+				if decErr == nil {
+					href = decoded
+				}
+			}
+		}
+	}
+
+	if strings.HasPrefix(href, "//") {
+		return "https:" + href
+	}
+	return href
+}
+
+func isLikelyResultURL(rawURL string) bool {
+	if rawURL == "" {
+		return false
+	}
+	if strings.HasPrefix(rawURL, "/") || strings.HasPrefix(strings.ToLower(rawURL), "javascript:") {
+		return false
+	}
+
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" || strings.Contains(host, "duckduckgo.com") {
+		return false
+	}
+	return true
+}
+
+func isLikelyNavTitle(title string) bool {
+	lower := strings.ToLower(strings.TrimSpace(title))
+	switch lower {
+	case "more results", "next", "feedback", "settings", "help", "privacy":
+		return true
+	}
+	return false
+}
+
+func extractSnippetAfterAnchor(html string, anchorEnd int, title string) string {
+	if anchorEnd >= len(html) {
+		return ""
+	}
+	end := anchorEnd + 500
+	if end > len(html) {
+		end = len(html)
+	}
+	text := stripHTML(html[anchorEnd:end])
+	text = strings.TrimPrefix(text, title)
+	text = strings.TrimSpace(text)
+	if len(text) > 220 {
+		text = text[:220]
+	}
+	return text
 }
 
 func stripHTML(html string) string {

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -15,6 +17,11 @@ type SignalRequest struct {
 	Bid        float64            `json:"bid"`
 	Ask        float64            `json:"ask"`
 	Spread     float64            `json:"spread"`
+	Balance    float64            `json:"balance,omitempty"`
+	Equity     float64            `json:"equity,omitempty"`
+	Margin     float64            `json:"margin,omitempty"`
+	FreeMargin float64            `json:"free_margin,omitempty"`
+	OpenPos    int                `json:"open_positions,omitempty"`
 	OHLCV      map[string][]OHLCV `json:"ohlcv"`      // keyed by TF: {"H1": [...], "H4": [...]}
 	Indicators map[string]float64 `json:"indicators"` // e.g. {"rsi_14": 42.5, "atr_14": 0.0035}
 	Timestamp  string             `json:"timestamp"`
@@ -62,6 +69,16 @@ type SignalHandler func(req *SignalRequest) *SignalResponse
 // TradeResultHandler is the callback invoked when EA reports trade closure.
 type TradeResultHandler func(req *TradeResultRequest)
 
+// AccountSnapshot holds the latest account state sent by MT5.
+type AccountSnapshot struct {
+	Balance       float64 `json:"balance"`
+	Equity        float64 `json:"equity"`
+	Margin        float64 `json:"margin"`
+	FreeMargin    float64 `json:"free_margin"`
+	OpenPositions int     `json:"open_positions"`
+	Timestamp     string  `json:"timestamp"`
+}
+
 // Server is the HTTP REST bridge between PhantomClaw and MT5 EA.
 type Server struct {
 	host          string
@@ -69,21 +86,29 @@ type Server struct {
 	server        *http.Server
 	onSignal      SignalHandler
 	onTradeResult TradeResultHandler
+
+	mu               sync.RWMutex
+	latestBySymbol   map[string]SignalRequest
+	latestAccount    AccountSnapshot
+	hasAccountSample bool
 }
 
 // NewServer creates a new bridge server.
 func NewServer(host string, port int, onSignal SignalHandler, onTradeResult TradeResultHandler) *Server {
 	s := &Server{
-		host:          host,
-		port:          port,
-		onSignal:      onSignal,
-		onTradeResult: onTradeResult,
+		host:           host,
+		port:           port,
+		onSignal:       onSignal,
+		onTradeResult:  onTradeResult,
+		latestBySymbol: make(map[string]SignalRequest),
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /signal", s.handleSignal)
 	mux.HandleFunc("POST /trade-result", s.handleTradeResult)
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /price", s.handlePrice)
+	mux.HandleFunc("GET /account", s.handleAccount)
 
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", host, port),
@@ -124,6 +149,19 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	s.mu.Lock()
+	s.latestBySymbol[strings.ToUpper(req.Symbol)] = req
+	s.latestAccount = AccountSnapshot{
+		Balance:       req.Balance,
+		Equity:        req.Equity,
+		Margin:        req.Margin,
+		FreeMargin:    req.FreeMargin,
+		OpenPositions: req.OpenPos,
+		Timestamp:     req.Timestamp,
+	}
+	s.hasAccountSample = true
+	s.mu.Unlock()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -148,4 +186,57 @@ func (s *Server) handleTradeResult(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"ok","service":"phantomclaw","version":"0.1.0"}`))
+}
+
+// handlePrice returns the latest MT5 snapshot for a symbol.
+func (s *Server) handlePrice(w http.ResponseWriter, r *http.Request) {
+	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
+	if symbol == "" {
+		http.Error(w, `{"error":"symbol is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	s.mu.RLock()
+	snapshot, ok := s.latestBySymbol[symbol]
+	s.mu.RUnlock()
+	if !ok {
+		http.Error(w, `{"error":"no snapshot for symbol yet"}`, http.StatusNotFound)
+		return
+	}
+
+	out := map[string]any{
+		"symbol":    snapshot.Symbol,
+		"bid":       snapshot.Bid,
+		"ask":       snapshot.Ask,
+		"spread":    snapshot.Spread,
+		"timestamp": snapshot.Timestamp,
+		"source":    "mt5_bridge_snapshot",
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// handleAccount returns the latest MT5 account snapshot.
+func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	account := s.latestAccount
+	hasSample := s.hasAccountSample
+	s.mu.RUnlock()
+
+	if !hasSample {
+		http.Error(w, `{"error":"no account snapshot yet"}`, http.StatusNotFound)
+		return
+	}
+
+	out := map[string]any{
+		"balance":        account.Balance,
+		"equity":         account.Equity,
+		"margin":         account.Margin,
+		"free_margin":    account.FreeMargin,
+		"open_positions": account.OpenPositions,
+		"timestamp":      account.Timestamp,
+		"source":         "mt5_bridge_snapshot",
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
 }

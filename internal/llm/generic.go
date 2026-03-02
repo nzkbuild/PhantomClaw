@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -65,13 +66,98 @@ func (g *GenericProvider) Chat(ctx context.Context, messages []Message) (string,
 }
 
 func (g *GenericProvider) StreamChat(ctx context.Context, messages []Message, callback StreamCallback) error {
-	// Use non-streaming and deliver as single chunk
-	// (streaming SSE parsing can be added later)
-	result, err := g.Chat(ctx, messages)
-	if err != nil {
-		return err
+	body := map[string]any{
+		"model":    g.model,
+		"messages": toGenericMessages(messages),
+		"stream":   true,
 	}
-	callback(result)
+	payload, _ := json.Marshal(body)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", g.baseURL+"/chat/completions", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("llm/%s: stream request error: %w", g.name, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	if g.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+g.apiKey)
+	}
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("llm/%s: stream HTTP error: %w", g.name, err)
+	}
+	defer resp.Body.Close()
+
+	// Some OpenAI-compatible backends do not support SSE streaming.
+	// Fall back to non-streaming completion in that case.
+	if resp.StatusCode != http.StatusOK {
+		result, err := g.Chat(ctx, messages)
+		if err != nil {
+			respBody, _ := io.ReadAll(resp.Body)
+			return &APIError{
+				Provider:   g.name,
+				StatusCode: resp.StatusCode,
+				Body:       string(respBody),
+			}
+		}
+		callback(result)
+		return nil
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("llm/%s: stream read error: %w", g.name, err)
+		}
+
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "data:") {
+			continue
+		}
+
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" {
+			continue
+		}
+		if payload == "[DONE]" {
+			break
+		}
+
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+				Text    string `json:"text"`
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+
+		text := chunk.Choices[0].Delta.Content
+		if text == "" {
+			text = chunk.Choices[0].Text
+		}
+		if text == "" {
+			text = chunk.Choices[0].Message.Content
+		}
+		if text != "" {
+			callback(text)
+		}
+	}
+
 	return nil
 }
 
@@ -200,12 +286,8 @@ func (e *APIError) Error() string {
 func toGenericMessages(messages []Message) []map[string]string {
 	var result []map[string]string
 	for _, m := range messages {
-		role := m.Role
-		if role == "tool" {
-			role = "assistant"
-		}
 		result = append(result, map[string]string{
-			"role":    role,
+			"role":    m.Role,
 			"content": m.Content,
 		})
 	}

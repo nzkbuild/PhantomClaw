@@ -133,6 +133,10 @@ func Load(path string) (*Config, error) {
 
 	v.SetDefault("memory.db_path", "data/phantom.db")
 	v.SetDefault("memory.log_dir", "data/logs")
+	v.SetDefault("memory.sessions_dir", "data/sessions")
+
+	v.SetDefault("heartbeat.enabled", false)
+	v.SetDefault("heartbeat.interval_min", 5)
 
 	v.SetDefault("llm.primary", "claude")
 

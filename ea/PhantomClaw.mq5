@@ -64,6 +64,11 @@ string BuildSignalPayload()
    double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
    double spread = (ask - bid) / SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double margin = AccountInfoDouble(ACCOUNT_MARGIN);
+   double freeMargin = AccountInfoDouble(ACCOUNT_FREEMARGIN);
+   int openPositions = PositionsTotal();
 
    // Current candle data (H1)
    double o = iOpen(symbol, PERIOD_H1, 0);
@@ -95,6 +100,11 @@ string BuildSignalPayload()
    json += "\"bid\":" + DoubleToString(bid, 5) + ",";
    json += "\"ask\":" + DoubleToString(ask, 5) + ",";
    json += "\"spread\":" + DoubleToString(spread, 1) + ",";
+   json += "\"balance\":" + DoubleToString(balance, 2) + ",";
+   json += "\"equity\":" + DoubleToString(equity, 2) + ",";
+   json += "\"margin\":" + DoubleToString(margin, 2) + ",";
+   json += "\"free_margin\":" + DoubleToString(freeMargin, 2) + ",";
+   json += "\"open_positions\":" + IntegerToString(openPositions) + ",";
    json += "\"ohlcv\":{\"H1\":[{";
    json += "\"o\":" + DoubleToString(o, 5) + ",";
    json += "\"h\":" + DoubleToString(h, 5) + ",";
