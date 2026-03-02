@@ -10,11 +10,19 @@ import (
 
 // RegisterMVPSkills registers the Phase 1 MVP skills into the registry.
 // bridgeURL is "http://127.0.0.1:8765" (the MT5 EA bridge).
-func RegisterMVPSkills(r *Registry, bridgeURL string) {
+// cronDeps is optional — if provided, registers the cron_add tool.
+func RegisterMVPSkills(r *Registry, bridgeURL string, cronDeps *CronDeps) {
 	r.Register(getPriceSkill())
 	r.Register(placePendingSkill(bridgeURL))
 	r.Register(cancelPendingSkill(bridgeURL))
 	r.Register(getAccountInfoSkill())
+
+	// Phase C tools
+	if cronDeps != nil {
+		r.Register(CronAddSkill(*cronDeps))
+	}
+	r.Register(webSearchSkill())
+	r.Register(webFetchSkill())
 }
 
 // --- get_price ---

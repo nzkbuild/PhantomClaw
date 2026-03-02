@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	maxContextTokens = 2000 // PRD §13.7 — cap on injected context
-	maxToolRounds    = 3    // Max ReAct iterations before forcing a decision
+	maxContextTokens  = 2000 // PRD §13.7 — cap on injected context
+	maxToolRounds     = 5    // Max ReAct iterations before forcing a decision
+	maxIdenticalCalls = 2    // Break if same tool+args called this many times
 )
 
 // Agent is the core intelligence — the ReAct brain that drives PhantomClaw.
@@ -126,6 +127,8 @@ func (a *Agent) HandleSignal(ctx context.Context, req *bridge.SignalRequest) *br
 	}
 
 	var finalDecision string
+	type callRecord struct{ name, args string }
+	var callHistory []callRecord
 
 	for round := 0; round < maxToolRounds; round++ {
 		result, err := a.llm.ToolCall(ctx, messages, tools)
@@ -140,6 +143,21 @@ func (a *Agent) HandleSignal(ctx context.Context, req *bridge.SignalRequest) *br
 		}
 
 		for _, tc := range result.ToolCalls {
+			// Loop detection: break if same tool+args seen too many times
+			record := callRecord{name: tc.Name, args: tc.Arguments}
+			dupeCount := 0
+			for _, prev := range callHistory {
+				if prev == record {
+					dupeCount++
+				}
+			}
+			if dupeCount >= maxIdenticalCalls {
+				log.Printf("agent: loop detected — %s called %dx with same args, breaking", tc.Name, dupeCount+1)
+				finalDecision = `{"action":"HOLD","reason":"loop detected: repeated tool call, breaking"}`
+				break
+			}
+			callHistory = append(callHistory, record)
+
 			toolResult, err := a.skills.Execute(tc.Name, json.RawMessage(tc.Arguments))
 			if err != nil {
 				toolResult = fmt.Sprintf(`{"error":"%s"}`, err.Error())
@@ -152,6 +170,9 @@ func (a *Agent) HandleSignal(ctx context.Context, req *bridge.SignalRequest) *br
 				Role:    "tool",
 				Content: toolResult,
 			})
+		}
+		if finalDecision != "" {
+			break
 		}
 	}
 
