@@ -104,11 +104,22 @@ func (tb *Bot) sendReply(ctx context.Context, b *bot.Bot, chatID int64, text str
 		if markdown {
 			// Retry once in plain text in case Markdown formatting caused API rejection.
 			params.ParseMode = ""
+			params.Text = markdownToPlain(text)
 			if _, err2 := b.SendMessage(ctx, params); err2 != nil {
 				log.Printf("telegram: send retry failed chat_id=%d err=%v", chatID, err2)
 			}
 		}
 	}
+}
+
+// markdownToPlain removes lightweight markdown markers so fallback text looks clean.
+func markdownToPlain(s string) string {
+	r := strings.NewReplacer(
+		"`", "",
+		"*", "",
+		"_", "",
+	)
+	return r.Replace(s)
 }
 
 // --- Command Handlers ---
