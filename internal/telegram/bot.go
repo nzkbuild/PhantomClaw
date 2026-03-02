@@ -85,11 +85,30 @@ func (tb *Bot) Send(ctx context.Context, text string) {
 	if tb.chatID == 0 {
 		return
 	}
-	tb.b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    tb.chatID,
-		Text:      text,
-		ParseMode: models.ParseModeMarkdown,
-	})
+	tb.sendReply(ctx, tb.b, tb.chatID, text, true)
+}
+
+// sendReply sends a Telegram message and logs failures.
+// If markdown send fails, it retries once as plain text.
+func (tb *Bot) sendReply(ctx context.Context, b *bot.Bot, chatID int64, text string, markdown bool) {
+	params := &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   text,
+	}
+	if markdown {
+		params.ParseMode = models.ParseModeMarkdown
+	}
+
+	if _, err := b.SendMessage(ctx, params); err != nil {
+		log.Printf("telegram: send failed chat_id=%d markdown=%v err=%v text=%q", chatID, markdown, err, text)
+		if markdown {
+			// Retry once in plain text in case Markdown formatting caused API rejection.
+			params.ParseMode = ""
+			if _, err2 := b.SendMessage(ctx, params); err2 != nil {
+				log.Printf("telegram: send retry failed chat_id=%d err=%v", chatID, err2)
+			}
+		}
+	}
 }
 
 // --- Command Handlers ---
@@ -114,21 +133,13 @@ func (tb *Bot) handleStatus(ctx context.Context, b *bot.Bot, update *models.Upda
 		tb.deps.Scheduler.IsWeekend(),
 	)
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
-		Text:      msg,
-		ParseMode: models.ParseModeMarkdown,
-	})
+	tb.sendReply(ctx, b, update.Message.Chat.ID, msg, true)
 }
 
 func (tb *Bot) handleStart(ctx context.Context, b *bot.Bot, update *models.Update) {
 	logInbound("/start", update)
 	msg := "✅ *PhantomClaw connected*\n\nSend `/status` to check runtime state or `/help` for all commands."
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
-		Text:      msg,
-		ParseMode: models.ParseModeMarkdown,
-	})
+	tb.sendReply(ctx, b, update.Message.Chat.ID, msg, true)
 }
 
 func (tb *Bot) handleHalt(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -136,31 +147,20 @@ func (tb *Bot) handleHalt(ctx context.Context, b *bot.Bot, update *models.Update
 	tb.deps.Safety.SetMode(safety.ModeHalt)
 	tb.deps.Risk.SetHalted(true)
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
-		Text:      "🛑 *HALT ACTIVATED*\nAll trading frozen. Pending orders will be cancelled.\nUse `/mode auto` to resume.",
-		ParseMode: models.ParseModeMarkdown,
-	})
+	tb.sendReply(ctx, b, update.Message.Chat.ID, "🛑 *HALT ACTIVATED*\nAll trading frozen. Pending orders will be cancelled.\nUse `/mode auto` to resume.", true)
 }
 
 func (tb *Bot) handleMode(ctx context.Context, b *bot.Bot, update *models.Update) {
 	logInbound("/mode", update)
 	parts := strings.Fields(update.Message.Text)
 	if len(parts) < 2 {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID:    update.Message.Chat.ID,
-			Text:      "Usage: `/mode observe|suggest|auto|halt`",
-			ParseMode: models.ParseModeMarkdown,
-		})
+		tb.sendReply(ctx, b, update.Message.Chat.ID, "Usage: `/mode observe|suggest|auto|halt`", true)
 		return
 	}
 
 	mode, err := safety.ParseMode(parts[1])
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   fmt.Sprintf("❌ %s", err),
-		})
+		tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("❌ %s", err), false)
 		return
 	}
 
@@ -171,11 +171,7 @@ func (tb *Bot) handleMode(ctx context.Context, b *bot.Bot, update *models.Update
 		tb.deps.Risk.SetHalted(false)
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
-		Text:      fmt.Sprintf("✅ Mode switched to: %s", tb.deps.Safety.StatusText()),
-		ParseMode: models.ParseModeMarkdown,
-	})
+	tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("✅ Mode switched to: %s", tb.deps.Safety.StatusText()), true)
 }
 
 func (tb *Bot) handleReport(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -210,11 +206,7 @@ func (tb *Bot) handleReport(ctx context.Context, b *bot.Bot, update *models.Upda
 		diaryText,
 	)
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
-		Text:      msg,
-		ParseMode: models.ParseModeMarkdown,
-	})
+	tb.sendReply(ctx, b, update.Message.Chat.ID, msg, true)
 }
 
 func (tb *Bot) handlePairs(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -245,20 +237,12 @@ func (tb *Bot) handlePairs(ctx context.Context, b *bot.Bot, update *models.Updat
 		msg.WriteString("XAUUSD, EURUSD, USDJPY, GBPUSD\n")
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
-		Text:      msg.String(),
-		ParseMode: models.ParseModeMarkdown,
-	})
+	tb.sendReply(ctx, b, update.Message.Chat.ID, msg.String(), true)
 }
 
 func (tb *Bot) handlePending(ctx context.Context, b *bot.Bot, update *models.Update) {
 	logInbound("/pending", update)
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
-		Text:      "📋 *Pending Orders*\n\n_Pending orders are managed by the EA. Check MT5 terminal for live status._",
-		ParseMode: models.ParseModeMarkdown,
-	})
+	tb.sendReply(ctx, b, update.Message.Chat.ID, "📋 *Pending Orders*\n\n_Pending orders are managed by the EA. Check MT5 terminal for live status._", true)
 }
 
 func (tb *Bot) handleConfidence(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -275,11 +259,7 @@ func (tb *Bot) handleConfidence(ctx context.Context, b *bot.Bot, update *models.
 		conf.Score, conf.Action, conf.LotFactor,
 	)
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
-		Text:      msg,
-		ParseMode: models.ParseModeMarkdown,
-	})
+	tb.sendReply(ctx, b, update.Message.Chat.ID, msg, true)
 }
 
 func (tb *Bot) handleConfig(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -294,29 +274,19 @@ func (tb *Bot) handleConfig(ctx context.Context, b *bot.Bot, update *models.Upda
 		stats.Halted,
 	)
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
-		Text:      msg,
-		ParseMode: models.ParseModeMarkdown,
-	})
+	tb.sendReply(ctx, b, update.Message.Chat.ID, msg, true)
 }
 
 func (tb *Bot) handleRollback(ctx context.Context, b *bot.Bot, update *models.Update) {
 	logInbound("/rollback", update)
 	if tb.deps.Strategy == nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "❌ Strategy manager not configured",
-		})
+		tb.sendReply(ctx, b, update.Message.Chat.ID, "❌ Strategy manager not configured", false)
 		return
 	}
 
 	versions, err := tb.deps.Strategy.ListVersions(5)
 	if err != nil || len(versions) == 0 {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "📜 No strategy versions available yet.",
-		})
+		tb.sendReply(ctx, b, update.Message.Chat.ID, "📜 No strategy versions available yet.", false)
 		return
 	}
 
@@ -334,26 +304,15 @@ func (tb *Bot) handleRollback(ctx context.Context, b *bot.Bot, update *models.Up
 		fmt.Sscanf(parts[1], "%d", &targetVersion)
 		if targetVersion > 0 {
 			if err := tb.deps.Strategy.Rollback(targetVersion); err != nil {
-				b.SendMessage(ctx, &bot.SendMessageParams{
-					ChatID: update.Message.Chat.ID,
-					Text:   fmt.Sprintf("❌ Rollback failed: %v", err),
-				})
+				tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("❌ Rollback failed: %v", err), false)
 				return
 			}
-			b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID:    update.Message.Chat.ID,
-				Text:      fmt.Sprintf("✅ Rolled back to strategy v%d", targetVersion),
-				ParseMode: models.ParseModeMarkdown,
-			})
+			tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("✅ Rolled back to strategy v%d", targetVersion), true)
 			return
 		}
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
-		Text:      sb.String(),
-		ParseMode: models.ParseModeMarkdown,
-	})
+	tb.sendReply(ctx, b, update.Message.Chat.ID, sb.String(), true)
 }
 
 func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -370,11 +329,7 @@ func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update
 		"`/config` — Risk config\n" +
 		"`/help` — This message"
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
-		Text:      msg,
-		ParseMode: models.ParseModeMarkdown,
-	})
+	tb.sendReply(ctx, b, update.Message.Chat.ID, msg, true)
 }
 
 func (tb *Bot) handleUnknown(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -383,9 +338,5 @@ func (tb *Bot) handleUnknown(ctx context.Context, b *bot.Bot, update *models.Upd
 		return
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
-		Text:      "🤖 Bot is online. Use `/help` to see available commands.",
-		ParseMode: models.ParseModeMarkdown,
-	})
+	tb.sendReply(ctx, b, update.Message.Chat.ID, "🤖 Bot is online. Use /help to see available commands.", false)
 }
