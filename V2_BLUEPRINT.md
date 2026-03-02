@@ -32,7 +32,12 @@ TARGET (v2):
 
 ### Pillar 1: Provider Layer ⚡
 **Problem:** 3 hardcoded providers (Claude, GPT-4o, DeepSeek). Adding one = writing a new Go file.
-**OpenClaw pattern:** `provider/model` format + generic OpenAI-compatible adapter.
+**OpenClaw pattern:** `provider/model` format + generic OpenAI-compatible adapter + error classifier + cooldown.
+
+**What's happening in plain English:**
+> Right now, if you want to add a new AI brain (like Groq or Ollama), I have to write a whole new Go file. That's dumb. OpenClaw solved this — most AI providers speak the same language (OpenAI format). So we build ONE adapter that works with any of them. You just add a name, URL, and API key to config.yaml = done.
+>
+> We also need the bot to be SMART about failures. If Claude goes down at 3 AM, the bot shouldn't just blindly try the next one — it should know WHY it failed (rate limit? bad key? model doesn't exist?) and react differently. And if a provider keeps failing, put it in timeout so we stop wasting time on it.
 
 | Provider | Format | Status |
 |----------|--------|--------|
@@ -47,7 +52,31 @@ TARGET (v2):
 
 > **Key insight:** OpenRouter, Ollama, Groq, Mistral, Together AI all speak OpenAI format. **One generic adapter = all of them.**
 
-**Effort:** Small · **Impact:** 🔴 Critical
+**Components to build:**
+```
+Provider Registry
+  ├── GenericProvider (base_url + api_key + model) ← covers 80% of providers
+  ├── ClaudeProvider (Anthropic's non-standard API) ← already have
+  └── GeminiProvider (Google's non-standard API) ← future
+
+Execution Router (replaces current basic Router)
+  ├── Primary → fallback chain (same as now, but smarter)
+  ├── Error Classifier
+  │     ├── rate_limit → wait & retry same provider
+  │     ├── auth_error → skip, alert on Telegram
+  │     ├── model_not_found → skip, log warning
+  │     ├── network_error → retry once, then fallback
+  │     └── unknown → fallback immediately
+  ├── Per-provider Cooldown
+  │     └── 3 failures in 5 min → cooldown 5 min → auto-recover
+  └── Model Aliases
+        ├── "fast" → groq/llama-3.3-70b
+        ├── "cheap" → deepseek/deepseek-chat
+        ├── "smart" → anthropic/claude-sonnet-4
+        └── "local" → ollama/qwen3
+```
+
+**Effort:** Small-Medium · **Impact:** 🔴 Critical
 
 ---
 
@@ -95,11 +124,14 @@ TARGET (v2):
 
 ## Phase Plan
 
-### Phase A — Provider Layer (1 session)
+### Phase A — Provider Layer (1-2 sessions)
 - [ ] Generic `openai_compat.go` provider (base URL + API key + model)
 - [ ] `provider/model` config format in `config.yaml`
+- [ ] Error classifier (rate_limit / auth / model_not_found / network)
+- [ ] Per-provider cooldown (3 fails → 5 min timeout → auto-recover)
+- [ ] Model aliases in config (`fast`, `cheap`, `smart`, `local`)
 - [ ] Refactor router to use new format
-- [ ] Add config entries for: OpenRouter, Ollama, Groq, Gemini
+- [ ] Add config entries for: OpenRouter, Ollama, Groq
 - [ ] Test with at least 2 new providers
 
 ### Phase B — Agent Intelligence (2-3 sessions)
