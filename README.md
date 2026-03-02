@@ -147,6 +147,8 @@ Open Telegram and send `/status` to your bot — it should reply!
 
 Everything is controlled through **Telegram**. Just send these commands to your bot:
 
+Only the configured `telegram.chat_id` is authorized to control the bot.
+
 | Command | What It Does |
 |---------|-------------|
 | `/status` | Shows current mode, open positions, daily P&L, and session |

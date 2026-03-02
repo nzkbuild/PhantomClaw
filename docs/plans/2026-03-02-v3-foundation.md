@@ -17,6 +17,7 @@
 - 2026-03-02: Task 3 completed (pending→delivered→consumed decision lifecycle + explicit consume semantics + consume endpoint).
 - 2026-03-02: Task 4 completed (risk snapshot reconciliation for equity + open positions, wired before signal risk checks).
 - 2026-03-02: Task 5 completed (true drawdown gate uses peak-to-current equity, not dailyLoss/equity proxy).
+- 2026-03-02: Task 6 completed (Telegram inbound ACL via centralized auth wrapper + unit tests).
 
 ---
 

@@ -14,6 +14,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - `POST /decision/consume` endpoint for explicit decision consumption by `request_id`
 - Risk engine reconciliation API `SyncAccountSnapshot(equity, open_positions)`
 - Risk tests covering snapshot-driven open-position reconciliation and drawdown gating
+- Telegram ACL unit tests for configured/mismatched chat and nil payload handling
 
 ### Changed
 - EA now attaches `request_id` in signal payloads and includes it when polling `/decision`
@@ -23,6 +24,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - EA decision polling now sends `consume=1` to preserve one-shot execution behavior
 - Signal callback now reconciles risk engine snapshot before evaluating each signal
 - Drawdown circuit breaker now uses true peak-to-current equity drawdown
+- Telegram command handlers now enforce inbound `chat_id` authorization
 
 ## [2.0.0] - 2026-03-02
 

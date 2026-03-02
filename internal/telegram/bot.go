@@ -58,17 +58,17 @@ func New(token string, chatID int64, deps Dependencies) (*Bot, error) {
 		return nil, fmt.Errorf("telegram: init error: %w", err)
 	}
 
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/status", bot.MatchTypePrefix, tb.handleStatus)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypePrefix, tb.handleStart)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/halt", bot.MatchTypePrefix, tb.handleHalt)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/mode", bot.MatchTypePrefix, tb.handleMode)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/report", bot.MatchTypePrefix, tb.handleReport)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/pairs", bot.MatchTypePrefix, tb.handlePairs)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/pending", bot.MatchTypePrefix, tb.handlePending)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/confidence", bot.MatchTypePrefix, tb.handleConfidence)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/config", bot.MatchTypePrefix, tb.handleConfig)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/rollback", bot.MatchTypePrefix, tb.handleRollback)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypePrefix, tb.handleHelp)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/status", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleStatus))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleStart))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/halt", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleHalt))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/mode", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleMode))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/report", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleReport))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/pairs", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handlePairs))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/pending", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handlePending))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/confidence", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleConfidence))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/config", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleConfig))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/rollback", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleRollback))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleHelp))
 
 	tb.b = b
 	return tb, nil
@@ -120,6 +120,44 @@ func markdownToPlain(s string) string {
 		"_", "",
 	)
 	return r.Replace(s)
+}
+
+func (tb *Bot) wrapAuthorized(next func(context.Context, *bot.Bot, *models.Update)) func(context.Context, *bot.Bot, *models.Update) {
+	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		if !tb.isAuthorized(update) {
+			tb.logUnauthorized(update)
+			return
+		}
+		next(ctx, b, update)
+	}
+}
+
+func (tb *Bot) isAuthorized(update *models.Update) bool {
+	if update == nil || update.Message == nil {
+		return false
+	}
+	if tb.chatID == 0 {
+		return true
+	}
+	return update.Message.Chat.ID == tb.chatID
+}
+
+func (tb *Bot) logUnauthorized(update *models.Update) {
+	if update == nil || update.Message == nil {
+		log.Printf("telegram: inbound unauthorized (no message payload)")
+		return
+	}
+	userID := int64(0)
+	if update.Message.From != nil {
+		userID = update.Message.From.ID
+	}
+	log.Printf(
+		"telegram: inbound unauthorized chat_id=%d expected_chat_id=%d user_id=%d text=%q",
+		update.Message.Chat.ID,
+		tb.chatID,
+		userID,
+		update.Message.Text,
+	)
 }
 
 // --- Command Handlers ---
@@ -344,6 +382,10 @@ func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update
 }
 
 func (tb *Bot) handleUnknown(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if !tb.isAuthorized(update) {
+		tb.logUnauthorized(update)
+		return
+	}
 	logInbound("unknown", update)
 	if update.Message == nil {
 		return
