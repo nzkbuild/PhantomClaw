@@ -124,23 +124,23 @@ Execution Router (replaces current basic Router)
 
 ## Phase Plan
 
-### Phase A — Provider Layer (1-2 sessions)
-- [ ] Generic `openai_compat.go` provider (base URL + API key + model)
-- [ ] `provider/model` config format in `config.yaml`
-- [ ] Error classifier (rate_limit / auth / model_not_found / network)
-- [ ] Per-provider cooldown (3 fails → 5 min timeout → auto-recover)
-- [ ] Model aliases in config (`fast`, `cheap`, `smart`, `local`)
-- [ ] Refactor router to use new format
-- [ ] Add config entries for: OpenRouter, Ollama, Groq
+### Phase A — Provider Layer ✅ (`5a59b44`)
+- [x] Generic `openai_compat.go` provider (base URL + API key + model)
+- [x] `provider/model` config format in `config.yaml`
+- [x] Error classifier (rate_limit / auth / model_not_found / network)
+- [x] Per-provider cooldown (3 fails → 5 min timeout → auto-recover)
+- [x] Model aliases in config (`fast`, `cheap`, `smart`, `local`)
+- [x] Refactor router to use new format
+- [x] Add config entries for: OpenRouter, Ollama, Groq
 - [ ] Test with at least 2 new providers
 
-### Phase B — Agent Intelligence (2-3 sessions)
-- [ ] JSONL session store (per-day conversation history)
-- [ ] Inject last N turns into `buildPrompt()`
-- [ ] System cron jobs (morning scan, pre-London, position checks)
-- [ ] Agent-initiated cron (`cron.add` tool)
-- [ ] Heartbeat ping to Telegram
-- [ ] Tool documentation layer in system prompt
+### Phase B — Agent Intelligence ✅ (`c21cf45`)
+- [x] JSONL session store (per-day conversation history)
+- [x] Inject last N turns into `buildPrompt()`
+- [x] System cron jobs (morning scan, position checks)
+- [x] Agent-initiated cron (`AddDynamic` scheduler method)
+- [x] Heartbeat ping + health checks
+- [x] Tool documentation layer in system prompt
 
 ### Phase C — Tool System (2-3 sessions)
 - [ ] Native tool calling (Claude tool_use / OpenAI function_calling)
