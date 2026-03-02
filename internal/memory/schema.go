@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS pending_decisions (
     request_id    TEXT PRIMARY KEY,
     symbol        TEXT    NOT NULL,
     decision_json TEXT    NOT NULL,
-    status        TEXT    NOT NULL DEFAULT 'pending', -- pending | consumed | expired
+    status        TEXT    NOT NULL DEFAULT 'pending', -- pending | delivered | consumed | expired
     created_at    DATETIME NOT NULL DEFAULT (datetime('now')),
     updated_at    DATETIME NOT NULL DEFAULT (datetime('now')),
     expires_at    DATETIME NOT NULL

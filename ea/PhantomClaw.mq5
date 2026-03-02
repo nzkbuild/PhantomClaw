@@ -175,7 +175,7 @@ string GetFromAgent(string endpoint)
 void PollDecision()
 {
    string symbol = Symbol();
-   string endpoint = "/decision?symbol=" + symbol;
+   string endpoint = "/decision?symbol=" + symbol + "&consume=1";
    if(g_lastRequestID != "")
       endpoint += "&request_id=" + g_lastRequestID;
    string response = GetFromAgent(endpoint);

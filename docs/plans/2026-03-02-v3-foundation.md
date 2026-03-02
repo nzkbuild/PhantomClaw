@@ -14,6 +14,7 @@
 
 - 2026-03-02: Task 1 completed (bridge `request_id` correlation + EA request_id polling + bridge tests).
 - 2026-03-02: Task 2 completed (durable `pending_decisions` SQLite queue + bridge DB fallback + lifecycle tests).
+- 2026-03-02: Task 3 completed (pending→delivered→consumed decision lifecycle + explicit consume semantics + consume endpoint).
 
 ---
 

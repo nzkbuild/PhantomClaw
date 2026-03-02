@@ -64,9 +64,18 @@ func TestBridgeRequestCorrelation(t *testing.T) {
 		t.Fatalf("decision request_id=%q, want=req-123", decision.RequestID)
 	}
 
+	delivered := getDecision(t, s, "req-123", "")
+	if delivered.Action != "PLACE_PENDING" || delivered.RequestID != "req-123" {
+		t.Fatalf("expected delivered decision on second read, got: %+v", delivered)
+	}
+
+	consumeRead := getDecisionWithConsume(t, s, "req-123", "", true)
+	if consumeRead.Action != "PLACE_PENDING" || consumeRead.RequestID != "req-123" {
+		t.Fatalf("expected decision on consume read, got: %+v", consumeRead)
+	}
 	consumed := getDecision(t, s, "req-123", "")
 	if consumed.Action != "HOLD" || consumed.Reason != "no pending decision" {
-		t.Fatalf("unexpected consumed response: %+v", consumed)
+		t.Fatalf("unexpected consumed follow-up response: %+v", consumed)
 	}
 }
 
@@ -181,9 +190,60 @@ func TestBridgeDecisionPersistsInSQLite(t *testing.T) {
 		t.Fatalf("unexpected db-backed decision: %+v", fromDB)
 	}
 
+	stillDelivered := getDecision(t, s, "req-persist", "")
+	if stillDelivered.Action != "PLACE_PENDING" || stillDelivered.RequestID != "req-persist" {
+		t.Fatalf("expected delivered decision before consume, got: %+v", stillDelivered)
+	}
+
+	consumeRead := getDecisionWithConsume(t, s, "req-persist", "", true)
+	if consumeRead.Action != "PLACE_PENDING" || consumeRead.RequestID != "req-persist" {
+		t.Fatalf("expected decision on consume read, got: %+v", consumeRead)
+	}
 	consumed := getDecision(t, s, "req-persist", "")
 	if consumed.Action != "HOLD" || consumed.Reason != "no pending decision" {
-		t.Fatalf("expected consumed state after db delivery, got: %+v", consumed)
+		t.Fatalf("expected consumed state after db consume, got: %+v", consumed)
+	}
+}
+
+func TestBridgeDecisionConsumeEndpoint(t *testing.T) {
+	s := NewServer("127.0.0.1", 0, func(req *SignalRequest) *SignalResponse {
+		return &SignalResponse{
+			Action: "PLACE_PENDING",
+			Type:   "BUY_LIMIT",
+			Symbol: req.Symbol,
+			Reason: "ok",
+		}
+	}, nil, nil)
+
+	payload := `{
+		"request_id":"req-consume-endpoint",
+		"symbol":"EURUSD",
+		"timeframe":"H1",
+		"bid":1.10000,
+		"ask":1.10020,
+		"spread":2.0,
+		"ohlcv":{"H1":[]},
+		"indicators":{"rsi_14":45.0},
+		"timestamp":"2026-03-02 20:00:00"
+	}`
+	sigRec := httptest.NewRecorder()
+	sigReq := httptest.NewRequest(http.MethodPost, "/signal", strings.NewReader(payload))
+	s.handleSignal(sigRec, sigReq)
+
+	if _, ok := waitForDecision(t, s, "req-consume-endpoint", ""); !ok {
+		t.Fatal("expected decision before consume")
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/decision/consume?request_id=req-consume-endpoint", nil)
+	s.handleDecisionConsume(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("consume endpoint status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	after := getDecision(t, s, "req-consume-endpoint", "")
+	if after.Action != "HOLD" || after.Reason != "no pending decision" {
+		t.Fatalf("expected consumed decision, got: %+v", after)
 	}
 }
 
@@ -201,13 +261,20 @@ func waitForDecision(t *testing.T, s *Server, requestID, symbol string) (SignalR
 
 func getDecision(t *testing.T, s *Server, requestID, symbol string) SignalResponse {
 	t.Helper()
+	return getDecisionWithConsume(t, s, requestID, symbol, false)
+}
 
+func getDecisionWithConsume(t *testing.T, s *Server, requestID, symbol string, consume bool) SignalResponse {
+	t.Helper()
 	q := url.Values{}
 	if requestID != "" {
 		q.Set("request_id", requestID)
 	}
 	if symbol != "" {
 		q.Set("symbol", symbol)
+	}
+	if consume {
+		q.Set("consume", "1")
 	}
 
 	target := "/decision"

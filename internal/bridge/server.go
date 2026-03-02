@@ -120,6 +120,7 @@ func NewServer(host string, port int, onSignal SignalHandler, onTradeResult Trad
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /signal", s.handleSignal)
 	mux.HandleFunc("GET /decision", s.handleDecision)
+	mux.HandleFunc("POST /decision/consume", s.handleDecisionConsume)
 	mux.HandleFunc("POST /trade-result", s.handleTradeResult)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /price", s.handlePrice)
@@ -207,11 +208,16 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// handleDecision returns the latest pending decision by request_id (preferred) or symbol.
-// Decision is consumed once (removed after read).
+// handleDecision returns the latest pending/delivered decision by request_id (preferred) or symbol.
+// Read marks pending -> delivered. Consumption is explicit via consume query param or /decision/consume.
 func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
 	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
+	consume, consumeExplicit := parseBoolQuery(r.URL.Query().Get("consume"))
+	if !consumeExplicit && requestID == "" && symbol != "" {
+		// Backward compatibility: legacy symbol-only polling remains one-shot/consuming.
+		consume = true
+	}
 	if s.db != nil {
 		_ = s.db.ExpirePendingDecisions(time.Now())
 	}
@@ -223,60 +229,63 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 	var (
 		decision SignalResponse
 		ok       bool
+		status   string
 	)
 
-	// Prefer request_id correlation if provided.
-	if requestID != "" {
-		s.mu.Lock()
-		decision, ok = s.pendingByRequest[requestID]
-		if ok {
-			delete(s.pendingByRequest, requestID)
-			if decision.Symbol != "" {
-				if bySymbol, exists := s.pendingBySymbol[decision.Symbol]; exists && bySymbol.RequestID == requestID {
-					delete(s.pendingBySymbol, decision.Symbol)
+	if s.db != nil {
+		// Prefer request_id correlation if provided.
+		if requestID != "" {
+			if persisted, dbStatus, found, err := s.db.GetPendingDecisionByRequestID(requestID); err == nil && found {
+				if err := json.Unmarshal([]byte(persisted), &decision); err == nil {
+					ok = true
+					status = dbStatus
+					if decision.RequestID == "" {
+						decision.RequestID = requestID
+					}
 				}
 			}
 		}
-		s.mu.Unlock()
-	}
-	if !ok && requestID != "" && s.db != nil {
-		if persisted, found, err := s.db.GetPendingDecisionByRequestID(requestID); err == nil && found {
-			if err := json.Unmarshal([]byte(persisted), &decision); err == nil {
-				ok = true
-				if decision.RequestID == "" {
-					decision.RequestID = requestID
-				}
-			}
-		}
-	}
 
-	// Fallback to symbol polling for backward compatibility.
-	if !ok && symbol != "" {
-		s.mu.Lock()
-		decision, ok = s.pendingBySymbol[symbol]
-		if ok {
-			delete(s.pendingBySymbol, symbol)
-			if decision.RequestID != "" {
-				if byReq, exists := s.pendingByRequest[decision.RequestID]; exists && byReq.Symbol == symbol {
-					delete(s.pendingByRequest, decision.RequestID)
+		// Fallback to symbol polling for backward compatibility.
+		if !ok && symbol != "" {
+			if reqID, persisted, dbStatus, found, err := s.db.GetPendingDecisionBySymbol(symbol); err == nil && found {
+				if err := json.Unmarshal([]byte(persisted), &decision); err == nil {
+					ok = true
+					status = dbStatus
+					if decision.RequestID == "" {
+						decision.RequestID = reqID
+					}
 				}
 			}
 		}
-		s.mu.Unlock()
-	}
-	if !ok && symbol != "" && s.db != nil {
-		if reqID, persisted, found, err := s.db.GetPendingDecisionBySymbol(symbol); err == nil && found {
-			if err := json.Unmarshal([]byte(persisted), &decision); err == nil {
-				ok = true
-				if decision.RequestID == "" {
-					decision.RequestID = reqID
-				}
-			}
-		}
-	}
 
-	if ok && decision.RequestID != "" && s.db != nil {
-		_ = s.db.ConsumePendingDecision(decision.RequestID)
+		if ok {
+			s.storePendingDecisionInMemory(decision, strings.ToUpper(strings.TrimSpace(decision.Symbol)))
+			if decision.RequestID != "" && status == "pending" {
+				_ = s.db.MarkPendingDecisionDelivered(decision.RequestID)
+			}
+			if decision.RequestID != "" && consume {
+				_ = s.db.ConsumePendingDecision(decision.RequestID)
+				s.removePendingDecisionInMemory(decision.RequestID, decision.Symbol)
+			}
+		}
+	} else {
+		// In-memory fallback path (if DB unavailable).
+		if requestID != "" {
+			s.mu.RLock()
+			decision, ok = s.pendingByRequest[requestID]
+			s.mu.RUnlock()
+		}
+		if !ok && symbol != "" {
+			s.mu.RLock()
+			decision, ok = s.pendingBySymbol[symbol]
+			s.mu.RUnlock()
+		}
+		if ok {
+			if decision.RequestID != "" && consume {
+				s.removePendingDecisionInMemory(decision.RequestID, decision.Symbol)
+			}
+		}
 	}
 
 	if !ok {
@@ -292,15 +301,84 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(decision)
 }
 
-func (s *Server) storePendingDecision(decision SignalResponse, symbol string) {
+// handleDecisionConsume explicitly consumes a delivered/pending decision by request_id.
+func (s *Server) handleDecisionConsume(w http.ResponseWriter, r *http.Request) {
+	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
+	if requestID == "" {
+		var body struct {
+			RequestID string `json:"request_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		requestID = strings.TrimSpace(body.RequestID)
+	}
+	if requestID == "" {
+		http.Error(w, `{"error":"request_id is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	if s.db != nil {
+		_ = s.db.ConsumePendingDecision(requestID)
+	}
+	// Best-effort cleanup from in-memory mirrors as well.
+	s.mu.RLock()
+	decision, ok := s.pendingByRequest[requestID]
+	s.mu.RUnlock()
+	if ok {
+		s.removePendingDecisionInMemory(requestID, decision.Symbol)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":     "consumed",
+		"request_id": requestID,
+	})
+}
+
+func (s *Server) storePendingDecisionInMemory(decision SignalResponse, symbol string) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if symbol != "" {
 		s.pendingBySymbol[symbol] = decision
 	}
 	if decision.RequestID != "" {
 		s.pendingByRequest[decision.RequestID] = decision
 	}
-	s.mu.Unlock()
+}
+
+func (s *Server) removePendingDecisionInMemory(requestID, symbol string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if requestID != "" {
+		delete(s.pendingByRequest, requestID)
+	}
+	if symbol != "" {
+		normalized := strings.ToUpper(strings.TrimSpace(symbol))
+		if normalized != "" {
+			if current, exists := s.pendingBySymbol[normalized]; exists {
+				if requestID == "" || current.RequestID == requestID {
+					delete(s.pendingBySymbol, normalized)
+				}
+			}
+		}
+	}
+}
+
+func parseBoolQuery(v string) (bool, bool) {
+	if v == "" {
+		return false, false
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "y":
+		return true, true
+	case "0", "false", "no", "n":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func (s *Server) storePendingDecision(decision SignalResponse, symbol string) {
+	s.storePendingDecisionInMemory(decision, symbol)
 
 	if s.db == nil || decision.RequestID == "" {
 		return

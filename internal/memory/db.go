@@ -269,47 +269,60 @@ func (db *DB) UpsertPendingDecision(requestID, symbol, decisionJSON string, expi
 	return err
 }
 
-// GetPendingDecisionByRequestID retrieves an unconsumed, unexpired decision payload by request_id.
-func (db *DB) GetPendingDecisionByRequestID(requestID string) (string, bool, error) {
+// GetPendingDecisionByRequestID retrieves an active (pending/delivered) unexpired decision by request_id.
+func (db *DB) GetPendingDecisionByRequestID(requestID string) (string, string, bool, error) {
 	var decisionJSON string
+	var currentStatus string
 	err := db.conn.QueryRow(`
-		SELECT decision_json
+		SELECT decision_json, status
 		FROM pending_decisions
 		WHERE request_id = ?
-		  AND status = 'pending'
+		  AND status IN ('pending', 'delivered')
 		  AND expires_at > datetime('now')`,
 		requestID,
-	).Scan(&decisionJSON)
-	if err == sql.ErrNoRows {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, err
-	}
-	return decisionJSON, true, nil
-}
-
-// GetPendingDecisionBySymbol retrieves the latest unconsumed, unexpired decision payload for a symbol.
-func (db *DB) GetPendingDecisionBySymbol(symbol string) (string, string, bool, error) {
-	var requestID string
-	var decisionJSON string
-	err := db.conn.QueryRow(`
-		SELECT request_id, decision_json
-		FROM pending_decisions
-		WHERE symbol = ?
-		  AND status = 'pending'
-		  AND expires_at > datetime('now')
-		ORDER BY updated_at DESC
-		LIMIT 1`,
-		symbol,
-	).Scan(&requestID, &decisionJSON)
+	).Scan(&decisionJSON, &currentStatus)
 	if err == sql.ErrNoRows {
 		return "", "", false, nil
 	}
 	if err != nil {
 		return "", "", false, err
 	}
-	return requestID, decisionJSON, true, nil
+	return decisionJSON, currentStatus, true, nil
+}
+
+// GetPendingDecisionBySymbol retrieves the latest active (pending/delivered) unexpired decision payload for a symbol.
+func (db *DB) GetPendingDecisionBySymbol(symbol string) (string, string, string, bool, error) {
+	var requestID string
+	var decisionJSON string
+	var currentStatus string
+	err := db.conn.QueryRow(`
+		SELECT request_id, decision_json, status
+		FROM pending_decisions
+		WHERE symbol = ?
+		  AND status IN ('pending', 'delivered')
+		  AND expires_at > datetime('now')
+		ORDER BY updated_at DESC
+		LIMIT 1`,
+		symbol,
+	).Scan(&requestID, &decisionJSON, &currentStatus)
+	if err == sql.ErrNoRows {
+		return "", "", "", false, nil
+	}
+	if err != nil {
+		return "", "", "", false, err
+	}
+	return requestID, decisionJSON, currentStatus, true, nil
+}
+
+// MarkPendingDecisionDelivered marks a pending decision as delivered.
+func (db *DB) MarkPendingDecisionDelivered(requestID string) error {
+	_, err := db.conn.Exec(`
+		UPDATE pending_decisions
+		SET status = 'delivered', updated_at = datetime('now')
+		WHERE request_id = ? AND status = 'pending'`,
+		requestID,
+	)
+	return err
 }
 
 // ConsumePendingDecision marks a pending decision as consumed.
@@ -317,7 +330,7 @@ func (db *DB) ConsumePendingDecision(requestID string) error {
 	_, err := db.conn.Exec(`
 		UPDATE pending_decisions
 		SET status = 'consumed', updated_at = datetime('now')
-		WHERE request_id = ? AND status = 'pending'`,
+		WHERE request_id = ? AND status IN ('pending', 'delivered')`,
 		requestID,
 	)
 	return err
@@ -328,7 +341,7 @@ func (db *DB) ExpirePendingDecisions(now time.Time) error {
 	_, err := db.conn.Exec(`
 		UPDATE pending_decisions
 		SET status = 'expired', updated_at = datetime('now')
-		WHERE status = 'pending' AND expires_at <= ?`,
+		WHERE status IN ('pending', 'delivered') AND expires_at <= ?`,
 		now,
 	)
 	return err
