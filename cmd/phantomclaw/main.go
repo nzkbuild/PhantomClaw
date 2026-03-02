@@ -31,6 +31,19 @@ import (
 
 var version = "1.0.0"
 
+type alertSender interface {
+	Send(ctx context.Context, text string)
+}
+
+func makeSessionAlertSender(sender alertSender, logger *zap.SugaredLogger) func(context.Context, string) {
+	return func(ctx context.Context, text string) {
+		logger.Infow("alert: sending", "text_len", len(text))
+		if sender != nil {
+			sender.Send(ctx, text)
+		}
+	}
+}
+
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	flag.Parse()
@@ -332,10 +345,7 @@ func main() {
 	var sessionAlerts *alerts.SessionAlerts
 	if tgBot != nil {
 		sessionAlerts = alerts.NewSessionAlerts(
-			func(ctx context.Context, text string) {
-				// Send via Telegram bot
-				logger.Infow("alert: sending", "text_len", len(text))
-			},
+			makeSessionAlertSender(tgBot, logger),
 			cfg.Bot.Timezone,
 		)
 		sessionAlerts.Start()

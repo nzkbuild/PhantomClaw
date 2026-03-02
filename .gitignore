@@ -9,7 +9,7 @@ go.work
 go.work.sum
 /bin/
 /dist/
-phantomclaw
+/phantomclaw
 
 # Data (local runtime — never commit)
 /data/
