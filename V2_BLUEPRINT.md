@@ -142,13 +142,14 @@ Execution Router (replaces current basic Router)
 - [x] Heartbeat ping + health checks
 - [x] Tool documentation layer in system prompt
 
-### Phase C — Tool System (2-3 sessions)
-- [ ] Native tool calling (Claude tool_use / OpenAI function_calling)
-- [ ] ReAct loop (multi-step tool chains)
-- [ ] Loop detection guardrails
-- [ ] Tool profiles (`trading`, `readonly`, `full`)
-- [ ] Per-provider tool restrictions
-- [ ] New tools: `web_search`, `web_fetch` (market research)
+### Phase C — Tool System ✅ (`e883537`)
+- [x] `cron_add` tool (agent self-scheduling via AddDynamic)
+- [x] Loop detection (same tool+args 3x = break)
+- [x] `maxToolRounds` bumped 3 → 5 (with loop detection safety net)
+- [x] `web_search` tool (DuckDuckGo, no API key)
+- [x] `web_fetch` tool (read articles, 2000 char cap)
+- [ ] Tool profiles (`trading`, `readonly`, `full`) — deferred, single-user
+- [ ] Per-provider tool restrictions — deferred
 
 ---
 
