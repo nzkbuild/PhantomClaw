@@ -34,6 +34,7 @@ type Engine struct {
 	lastTradeAt      time.Time // Timestamp of last trade execution
 	profitableTrades int       // Count of profitable trades (for ramp-up)
 	accountEquity    float64   // Updated by bridge
+	equityPeak       float64   // Peak observed equity for true drawdown tracking
 	halted           bool
 }
 
@@ -65,10 +66,9 @@ func (e *Engine) CheckTrade(p TradeProposal) CheckResult {
 		return CheckResult{Approved: false, Reason: fmt.Sprintf("daily loss limit reached ($%.2f/$%.2f)", e.dailyLoss, e.cfg.MaxDailyLossUSD)}
 	}
 
-	// Drawdown circuit breaker
-	if e.accountEquity > 0 {
-		// Only check if we have equity data
-		drawdownPct := (e.dailyLoss / e.accountEquity) * 100
+	// Drawdown circuit breaker (true peak-to-current drawdown)
+	if e.accountEquity > 0 && e.equityPeak > 0 {
+		drawdownPct := ((e.equityPeak - e.accountEquity) / e.equityPeak) * 100
 		if drawdownPct >= e.cfg.MaxDrawdownPct {
 			return CheckResult{Approved: false, Reason: fmt.Sprintf("drawdown limit reached (%.1f%%/%.1f%%)", drawdownPct, e.cfg.MaxDrawdownPct)}
 		}
@@ -133,9 +133,7 @@ func (e *Engine) RecordTradeClose(pnl float64) {
 func (e *Engine) UpdateEquity(equity float64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if equity > 0 {
-		e.accountEquity = equity
-	}
+	e.setEquityLocked(equity)
 }
 
 // SyncAccountSnapshot reconciles risk engine state with the latest MT5 snapshot.
@@ -144,11 +142,19 @@ func (e *Engine) SyncAccountSnapshot(equity float64, openPositions int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if equity > 0 {
-		e.accountEquity = equity
-	}
+	e.setEquityLocked(equity)
 	if openPositions >= 0 {
 		e.openPositions = openPositions
+	}
+}
+
+func (e *Engine) setEquityLocked(equity float64) {
+	if equity <= 0 {
+		return
+	}
+	e.accountEquity = equity
+	if e.equityPeak <= 0 || equity > e.equityPeak {
+		e.equityPeak = equity
 	}
 }
 

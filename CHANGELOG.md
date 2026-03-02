@@ -22,6 +22,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Bridge decision lifecycle now follows `pending -> delivered -> consumed|expired`
 - EA decision polling now sends `consume=1` to preserve one-shot execution behavior
 - Signal callback now reconciles risk engine snapshot before evaluating each signal
+- Drawdown circuit breaker now uses true peak-to-current equity drawdown
 
 ## [2.0.0] - 2026-03-02
 

@@ -60,11 +60,11 @@ func TestRiskSnapshotEquityAffectsDrawdownCheck(t *testing.T) {
 	e := NewEngine(testRiskConfig())
 	p := testProposal()
 
-	// Daily loss is tracked from closed losing trades.
-	e.RecordTradeClose(-100.0) // dailyLoss = 100
+	// Build an equity peak first, then drop equity below threshold.
+	e.SyncAccountSnapshot(1200.0, 0) // peak
 	e.SyncAccountSnapshot(1000.0, 0)
 
-	// 100/1000 = 10% drawdown > 5% max => must block.
+	// True drawdown = (1200-1000)/1200 = 16.7% > 5% => must block.
 	result := e.CheckTrade(p)
 	if result.Approved {
 		t.Fatal("expected drawdown gate to block after equity sync")
