@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nzkbuild/PhantomClaw/internal/memory"
 )
 
 // SignalRequest is the payload sent by MT5 EA on candle close / threshold breach.
@@ -89,6 +91,7 @@ type Server struct {
 	server        *http.Server
 	onSignal      SignalHandler
 	onTradeResult TradeResultHandler
+	db            *memory.DB
 
 	mu               sync.RWMutex
 	latestBySymbol   map[string]SignalRequest
@@ -97,18 +100,21 @@ type Server struct {
 	latestAccount    AccountSnapshot
 	hasAccountSample bool
 	requestSeq       uint64
+	decisionTTL      time.Duration
 }
 
 // NewServer creates a new bridge server.
-func NewServer(host string, port int, onSignal SignalHandler, onTradeResult TradeResultHandler) *Server {
+func NewServer(host string, port int, onSignal SignalHandler, onTradeResult TradeResultHandler, db *memory.DB) *Server {
 	s := &Server{
 		host:             host,
 		port:             port,
 		onSignal:         onSignal,
 		onTradeResult:    onTradeResult,
+		db:               db,
 		latestBySymbol:   make(map[string]SignalRequest),
 		pendingBySymbol:  make(map[string]SignalResponse),
 		pendingByRequest: make(map[string]SignalResponse),
+		decisionTTL:      30 * time.Minute,
 	}
 
 	mux := http.NewServeMux()
@@ -186,14 +192,7 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 				decision.Symbol = symbol
 			}
 
-			s.mu.Lock()
-			if symbol != "" {
-				s.pendingBySymbol[symbol] = *decision
-			}
-			if decision.RequestID != "" {
-				s.pendingByRequest[decision.RequestID] = *decision
-			}
-			s.mu.Unlock()
+			s.storePendingDecision(*decision, symbol)
 		}(reqCopy)
 	}
 
@@ -213,6 +212,9 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
 	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
+	if s.db != nil {
+		_ = s.db.ExpirePendingDecisions(time.Now())
+	}
 	if requestID == "" && symbol == "" {
 		http.Error(w, `{"error":"request_id or symbol is required"}`, http.StatusBadRequest)
 		return
@@ -237,6 +239,16 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Unlock()
 	}
+	if !ok && requestID != "" && s.db != nil {
+		if persisted, found, err := s.db.GetPendingDecisionByRequestID(requestID); err == nil && found {
+			if err := json.Unmarshal([]byte(persisted), &decision); err == nil {
+				ok = true
+				if decision.RequestID == "" {
+					decision.RequestID = requestID
+				}
+			}
+		}
+	}
 
 	// Fallback to symbol polling for backward compatibility.
 	if !ok && symbol != "" {
@@ -252,6 +264,20 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Unlock()
 	}
+	if !ok && symbol != "" && s.db != nil {
+		if reqID, persisted, found, err := s.db.GetPendingDecisionBySymbol(symbol); err == nil && found {
+			if err := json.Unmarshal([]byte(persisted), &decision); err == nil {
+				ok = true
+				if decision.RequestID == "" {
+					decision.RequestID = reqID
+				}
+			}
+		}
+	}
+
+	if ok && decision.RequestID != "" && s.db != nil {
+		_ = s.db.ConsumePendingDecision(decision.RequestID)
+	}
 
 	if !ok {
 		decision = SignalResponse{
@@ -264,6 +290,31 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(decision)
+}
+
+func (s *Server) storePendingDecision(decision SignalResponse, symbol string) {
+	s.mu.Lock()
+	if symbol != "" {
+		s.pendingBySymbol[symbol] = decision
+	}
+	if decision.RequestID != "" {
+		s.pendingByRequest[decision.RequestID] = decision
+	}
+	s.mu.Unlock()
+
+	if s.db == nil || decision.RequestID == "" {
+		return
+	}
+	payload, err := json.Marshal(decision)
+	if err != nil {
+		return
+	}
+	_ = s.db.UpsertPendingDecision(
+		decision.RequestID,
+		decision.Symbol,
+		string(payload),
+		time.Now().Add(s.decisionTTL),
+	)
 }
 
 func (s *Server) nextRequestID(symbol string) string {

@@ -5,9 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nzkbuild/PhantomClaw/internal/memory"
 )
 
 func TestBridgeRequestCorrelation(t *testing.T) {
@@ -18,7 +21,7 @@ func TestBridgeRequestCorrelation(t *testing.T) {
 			Symbol: req.Symbol,
 			Reason: "ok",
 		}
-	}, nil)
+	}, nil, nil)
 
 	payload := `{
 		"request_id":"req-123",
@@ -75,7 +78,7 @@ func TestBridgeGeneratesRequestIDAndKeepsSymbolCompatibility(t *testing.T) {
 			Symbol: req.Symbol,
 			Reason: "ok",
 		}
-	}, nil)
+	}, nil, nil)
 
 	payload := `{
 		"symbol":"XAUUSD",
@@ -117,6 +120,70 @@ func TestBridgeGeneratesRequestIDAndKeepsSymbolCompatibility(t *testing.T) {
 	consumed := getDecision(t, s, ack.RequestID, "")
 	if consumed.Action != "HOLD" || consumed.Reason != "no pending decision" {
 		t.Fatalf("unexpected consumed response by request_id: %+v", consumed)
+	}
+}
+
+func TestBridgeDecisionPersistsInSQLite(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "bridge.db")
+	db, err := memory.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	s := NewServer("127.0.0.1", 0, func(req *SignalRequest) *SignalResponse {
+		return &SignalResponse{
+			Action: "PLACE_PENDING",
+			Type:   "BUY_LIMIT",
+			Symbol: req.Symbol,
+			Reason: "persisted",
+		}
+	}, nil, db)
+
+	payload := `{
+		"request_id":"req-persist",
+		"symbol":"GBPUSD",
+		"timeframe":"H1",
+		"bid":1.27000,
+		"ask":1.27020,
+		"spread":2.0,
+		"ohlcv":{"H1":[]},
+		"indicators":{"rsi_14":48.0},
+		"timestamp":"2026-03-02 20:00:00"
+	}`
+	sigRec := httptest.NewRecorder()
+	sigReq := httptest.NewRequest(http.MethodPost, "/signal", strings.NewReader(payload))
+	s.handleSignal(sigRec, sigReq)
+	if sigRec.Code != http.StatusOK {
+		t.Fatalf("signal status=%d, want=%d", sigRec.Code, http.StatusOK)
+	}
+
+	decision, ok := waitForDecision(t, s, "req-persist", "")
+	if !ok {
+		t.Fatal("expected in-memory decision before persistence test")
+	}
+	if decision.Action != "PLACE_PENDING" {
+		t.Fatalf("decision action=%q, want=PLACE_PENDING", decision.Action)
+	}
+
+	// Reinsert pending decision and clear in-memory queues to simulate restart.
+	err = db.UpsertPendingDecision("req-persist", "GBPUSD", `{"request_id":"req-persist","action":"PLACE_PENDING","type":"BUY_LIMIT","symbol":"GBPUSD","reason":"persisted"}`, time.Now().Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("UpsertPendingDecision: %v", err)
+	}
+	s.mu.Lock()
+	s.pendingByRequest = map[string]SignalResponse{}
+	s.pendingBySymbol = map[string]SignalResponse{}
+	s.mu.Unlock()
+
+	fromDB := getDecision(t, s, "req-persist", "")
+	if fromDB.Action != "PLACE_PENDING" || fromDB.RequestID != "req-persist" {
+		t.Fatalf("unexpected db-backed decision: %+v", fromDB)
+	}
+
+	consumed := getDecision(t, s, "req-persist", "")
+	if consumed.Action != "HOLD" || consumed.Reason != "no pending decision" {
+		t.Fatalf("expected consumed state after db delivery, got: %+v", consumed)
 	}
 }
 

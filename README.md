@@ -189,7 +189,7 @@ Everything is controlled through **Telegram**. Just send these commands to your 
 **The loop:**
 1. EA pushes signal data every 60 seconds to `/signal` (fast ACK)
 2. Bot processes analysis asynchronously (LLM latency does not block EA request)
-3. Bot stores a correlated decision (`request_id`, with symbol fallback for compatibility)
+3. Bot stores a correlated decision (`request_id`) in memory + SQLite (durable queue), with symbol fallback for compatibility
 4. EA polls `/decision?request_id=...&symbol=...` and executes PLACE/MODIFY/CANCEL/CLOSE actions
 5. Bot still enforces confidence, correlation, spread, and risk guards before storing decision
 6. When a trade closes, EA posts `/trade-result` and the bot writes lessons

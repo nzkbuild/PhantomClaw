@@ -87,6 +87,17 @@ CREATE TABLE IF NOT EXISTS conversations (
     created_at  DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Pending bridge decisions (durable queue across restarts)
+CREATE TABLE IF NOT EXISTS pending_decisions (
+    request_id    TEXT PRIMARY KEY,
+    symbol        TEXT    NOT NULL,
+    decision_json TEXT    NOT NULL,
+    status        TEXT    NOT NULL DEFAULT 'pending', -- pending | consumed | expired
+    created_at    DATETIME NOT NULL DEFAULT (datetime('now')),
+    updated_at    DATETIME NOT NULL DEFAULT (datetime('now')),
+    expires_at    DATETIME NOT NULL
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_trades_symbol    ON trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_trades_opened    ON trades(opened_at);
@@ -96,4 +107,6 @@ CREATE INDEX IF NOT EXISTS idx_diary_date       ON diary(date);
 CREATE INDEX IF NOT EXISTS idx_diary_type       ON diary(entry_type);
 CREATE INDEX IF NOT EXISTS idx_cache_expires    ON market_cache(expires_at);
 CREATE INDEX IF NOT EXISTS idx_ram_expires      ON session_ram(expires_at);
+CREATE INDEX IF NOT EXISTS idx_pending_symbol_status ON pending_decisions(symbol, status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_pending_expires       ON pending_decisions(expires_at);
 `

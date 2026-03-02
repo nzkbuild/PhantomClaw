@@ -250,3 +250,86 @@ func (db *DB) PruneExpiredCache() error {
 	_, err := db.conn.Exec("DELETE FROM market_cache WHERE expires_at <= datetime('now')")
 	return err
 }
+
+// --- Pending Decision Operations ---
+
+// UpsertPendingDecision stores or updates a pending bridge decision.
+func (db *DB) UpsertPendingDecision(requestID, symbol, decisionJSON string, expiresAt time.Time) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO pending_decisions (request_id, symbol, decision_json, status, expires_at, updated_at)
+		VALUES (?, ?, ?, 'pending', ?, datetime('now'))
+		ON CONFLICT(request_id) DO UPDATE SET
+			symbol = excluded.symbol,
+			decision_json = excluded.decision_json,
+			status = 'pending',
+			expires_at = excluded.expires_at,
+			updated_at = datetime('now')`,
+		requestID, symbol, decisionJSON, expiresAt,
+	)
+	return err
+}
+
+// GetPendingDecisionByRequestID retrieves an unconsumed, unexpired decision payload by request_id.
+func (db *DB) GetPendingDecisionByRequestID(requestID string) (string, bool, error) {
+	var decisionJSON string
+	err := db.conn.QueryRow(`
+		SELECT decision_json
+		FROM pending_decisions
+		WHERE request_id = ?
+		  AND status = 'pending'
+		  AND expires_at > datetime('now')`,
+		requestID,
+	).Scan(&decisionJSON)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return decisionJSON, true, nil
+}
+
+// GetPendingDecisionBySymbol retrieves the latest unconsumed, unexpired decision payload for a symbol.
+func (db *DB) GetPendingDecisionBySymbol(symbol string) (string, string, bool, error) {
+	var requestID string
+	var decisionJSON string
+	err := db.conn.QueryRow(`
+		SELECT request_id, decision_json
+		FROM pending_decisions
+		WHERE symbol = ?
+		  AND status = 'pending'
+		  AND expires_at > datetime('now')
+		ORDER BY updated_at DESC
+		LIMIT 1`,
+		symbol,
+	).Scan(&requestID, &decisionJSON)
+	if err == sql.ErrNoRows {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	return requestID, decisionJSON, true, nil
+}
+
+// ConsumePendingDecision marks a pending decision as consumed.
+func (db *DB) ConsumePendingDecision(requestID string) error {
+	_, err := db.conn.Exec(`
+		UPDATE pending_decisions
+		SET status = 'consumed', updated_at = datetime('now')
+		WHERE request_id = ? AND status = 'pending'`,
+		requestID,
+	)
+	return err
+}
+
+// ExpirePendingDecisions marks all expired pending decisions as expired.
+func (db *DB) ExpirePendingDecisions(now time.Time) error {
+	_, err := db.conn.Exec(`
+		UPDATE pending_decisions
+		SET status = 'expired', updated_at = datetime('now')
+		WHERE status = 'pending' AND expires_at <= ?`,
+		now,
+	)
+	return err
+}

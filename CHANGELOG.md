@@ -9,10 +9,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 ### Added
 - Bridge request correlation support via `request_id` on `/signal` and `/decision`
 - Bridge tests for correlated decision fetch and backward-compatible symbol polling
+- Durable `pending_decisions` SQLite table and DB APIs for bridge decision persistence
+- Bridge tests for DB-backed decision delivery across in-memory queue loss (restart simulation)
 
 ### Changed
 - EA now attaches `request_id` in signal payloads and includes it when polling `/decision`
 - Bridge now generates a request ID when absent to preserve compatibility with older EA behavior
+- Bridge `NewServer` now accepts memory DB handle and persists pending decisions with TTL
 
 ## [2.0.0] - 2026-03-02
 

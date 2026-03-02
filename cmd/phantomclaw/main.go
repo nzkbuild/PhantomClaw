@@ -276,6 +276,7 @@ func main() {
 				riskEngine.RecordTradeClose(req.PnL)
 			}
 		},
+		db,
 	)
 
 	// --- Telegram bot ---
