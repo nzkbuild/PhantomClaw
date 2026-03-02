@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versioned per [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-03-02
+
+### Added
+- **Multi-provider LLM system** — config-driven providers list (Claude, OpenAI, Groq, OpenRouter, Ollama, any OpenAI-compatible)
+- **Smart router** with error-aware fallback, per-provider cooldown, and model aliases
+- **Error classifier** — categorizes provider failures (rate_limit, auth, model_not_found, network, overloaded)
+- **Generic OpenAI-compatible adapter** (`generic.go`) — one adapter for any `/v1/chat/completions` endpoint
+- **JSONL session store** — per-day conversation history, agent remembers previous decisions
+- **Conversation history injection** — last 5 turns per pair in system prompt
+- **Heartbeat** — periodic health check with alerts
+- **Morning scan** (08:30 MYT) and position check (every 30 min during trading)
+- **Dynamic cron** — `AddDynamic()` method for runtime job scheduling
+- **`cron_add` tool** — agent can schedule its own future rechecks
+- **`web_search` tool** — DuckDuckGo web search (no API key required)
+- **`web_fetch` tool** — fetch and extract text from web pages
+- **Loop detection** — breaks ReAct loop if same tool+args called 3x
+- **Tool documentation** — human-readable tool descriptions in system prompt
+
+### Changed
+- `maxToolRounds` increased from 3 to 5 (with loop detection as safety net)
+- LLM config uses providers list (`config.yaml`) instead of per-provider sections
+- Environment variables now follow `PHANTOM_LLM_PROVIDERS_N_*` format
+- Agent brain logs "with conversation memory" on init
+
+### Removed
+- Hardcoded `deepseek.go` — replaced by generic adapter
+
 ## [0.1.0] - 2026-02-27
 
 ### Added

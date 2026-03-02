@@ -2,7 +2,7 @@
 
 > Your personal AI trading assistant that thinks, trades, and learns — all on autopilot.
 
-PhantomClaw is an autonomous trading bot that connects to **MetaTrader 5** and uses AI (Claude, GPT-4o, or DeepSeek) to analyze markets and place trades for you. It runs 24/7 on your Windows VPS, communicates with you through **Telegram**, and gets smarter after every trade.
+PhantomClaw is an autonomous trading bot that connects to **MetaTrader 5** and uses AI to analyze markets and place trades for you. It supports **multiple LLM providers** (Claude, GPT-4o, Groq, OpenRouter, Ollama, and any OpenAI-compatible API) with automatic failover. It runs 24/7 on your Windows VPS, communicates with you through **Telegram**, and gets smarter after every trade.
 
 **Private use only.**
 
@@ -27,11 +27,13 @@ PhantomClaw is an autonomous trading bot that connects to **MetaTrader 5** and u
 ## 🧠 What It Does
 
 1. **Reads the market** — Your MT5 Expert Advisor sends live price data to PhantomClaw every minute
-2. **Thinks with AI** — The bot asks Claude/GPT-4o to analyze the data, check past lessons, news, and sentiment
-3. **Decides to trade or wait** — A confidence score (0-100) determines if the setup is strong enough
-4. **Places pending orders** — If confidence is high enough, it places a limit/stop order in MT5
-5. **Learns from results** — After every trade closes, the AI writes a lesson and updates its strategy
-6. **Tells you what's happening** — You get Telegram alerts for trade decisions, session changes, and health pings
+2. **Thinks with AI** — The bot asks your LLM to analyze the data, check past lessons, news, and sentiment
+3. **Remembers context** — Conversation history prevents contradictory decisions within the same day
+4. **Decides to trade or wait** — A confidence score (0-100) determines if the setup is strong enough
+5. **Uses tools** — Can search the web for news, check prices, and schedule its own rechecks
+6. **Places pending orders** — If confidence is high enough, it places a limit/stop order in MT5
+7. **Learns from results** — After every trade closes, the AI writes a lesson and updates its strategy
+8. **Tells you what's happening** — You get Telegram alerts for trade decisions, session changes, and health pings
 
 ---
 
@@ -47,7 +49,7 @@ Before setting up PhantomClaw, make sure you have:
 | **GCC compiler** (for SQLite) | Install [TDM-GCC](https://jmeubank.github.io/tdm-gcc/) — pick the 64-bit version |
 | **Telegram Bot token** | Talk to [@BotFather](https://t.me/BotFather) on Telegram |
 | **Your Telegram Chat ID** | Talk to [@userinfobot](https://t.me/userinfobot) on Telegram |
-| **AI API key** (at least one) | Get from [Anthropic](https://console.anthropic.com/), [OpenAI](https://platform.openai.com/), or [DeepSeek](https://platform.deepseek.com/) |
+| **AI API key** (at least one) | Get from [Anthropic](https://console.anthropic.com/), [OpenAI](https://platform.openai.com/), [Groq](https://console.groq.com/), or any OpenAI-compatible provider |
 
 ---
 
@@ -68,17 +70,19 @@ cd PhantomClaw
 Set these environment variables in PowerShell. Replace the values with your actual keys:
 
 ```powershell
-# Required — at least one AI provider
-$env:PHANTOM_LLM_CLAUDE_API_KEY = "sk-ant-your-key-here"
+# Required — at least one AI provider (set in config.yaml providers list)
+$env:PHANTOM_LLM_PROVIDERS_0_API_KEY = "sk-ant-your-key-here"
 
-# Optional — add more for fallback (if Claude fails, it tries OpenAI, then DeepSeek)
-$env:PHANTOM_LLM_OPENAI_API_KEY = "sk-your-openai-key"
-$env:PHANTOM_LLM_DEEPSEEK_API_KEY = "sk-your-deepseek-key"
+# Optional — add more providers for fallback
+$env:PHANTOM_LLM_PROVIDERS_1_API_KEY = "sk-your-openai-key"
+$env:PHANTOM_LLM_PROVIDERS_2_API_KEY = "sk-your-groq-key"
 
 # Required — Telegram
 $env:PHANTOM_TELEGRAM_TOKEN = "123456:ABC-your-bot-token"
 $env:PHANTOM_TELEGRAM_CHAT_ID = "your-chat-id-number"
 ```
+
+> 💡 The provider order in `config.yaml` determines priority. The first provider with a valid API key becomes primary. If it fails, the bot automatically falls back to the next one.
 
 > 💡 **To make these permanent** (survive restarts), add them to System Environment Variables:
 > Settings → System → About → Advanced system settings → Environment Variables → New
@@ -122,11 +126,12 @@ cd C:\PhantomClaw
 
 You should see:
 ```
-🐾 PhantomClaw v1.0.0 starting...
+🐾 PhantomClaw v2.0.0 starting...
 config loaded (mode=AUTO, tz=Asia/Kuala_Lumpur, pairs=[XAUUSD EURUSD USDJPY GBPUSD])
 memory: SQLite initialized
-risk: engine initialized
-agent: brain initialized with full integrations
+sessions: store ready (dir=data/sessions)
+heartbeat: started (every 5 min)
+agent: brain initialized with full integrations + conversation memory
 🐾 PhantomClaw is running
 ```
 
@@ -177,12 +182,27 @@ Everything is controlled through **Telegram**. Just send these commands to your 
 
 **The loop:**
 1. EA sends candle data + indicators every 60 seconds
-2. Bot builds a prompt with: market data + strategy doc + past lessons + news + sentiment
-3. AI analyzes and returns: HOLD or PLACE_PENDING (with price, SL, TP)
-4. Bot checks: confidence score → correlation guard → spread filter → risk limits
-5. If all checks pass → sends order back to EA
-6. EA places the pending order in MT5
-7. When order fills and closes → EA reports result → AI writes a lesson
+2. Bot builds a prompt with: market data + strategy doc + past lessons + news + sentiment + **today's conversation history**
+3. AI analyzes and can **use tools** (search web, check prices, schedule rechecks)
+4. AI returns: HOLD or PLACE_PENDING (with price, SL, TP)
+5. Bot checks: confidence score → correlation guard → spread filter → risk limits
+6. If all checks pass → sends order back to EA
+7. EA places the pending order in MT5
+8. When order fills and closes → EA reports result → AI writes a lesson
+
+### 🔧 Agent Tools
+
+The AI agent has access to these tools:
+
+| Tool | Purpose |
+|------|---------|
+| `get_price` | Current bid/ask/spread from MT5 |
+| `place_pending` | Place limit/stop orders via EA bridge |
+| `cancel_pending` | Cancel orders by ticket |
+| `get_account_info` | Balance, equity, open positions |
+| `cron_add` | Schedule future rechecks ("wake me in 30 min") |
+| `web_search` | Search the web for market news |
+| `web_fetch` | Read news articles and economic calendars |
 
 ---
 
@@ -198,10 +218,11 @@ PhantomClaw follows a daily schedule (all times in MYT / UTC+8):
 
 **Key alerts you'll receive:**
 - ☀️ 08:00 — Morning brief
+- 📊 08:30 — Morning scan (all pairs)
 - ⚡ 14:45 — "15 minutes to London open"
 - 🇬🇧 15:00 — Trading mode activated
-- 🇺🇸 20:00 — NY session overlap (peak liquidity)
-- 💓 Every 6 hours — Health ping ("I'm still running")
+- 🔄 Every 30 min (trading) — Position check
+- 💓 Every 5 min — Heartbeat health check
 
 ---
 
@@ -245,20 +266,33 @@ $env:PHANTOM_RISK_MAX_DAILY_LOSS_USD = "50"
 ```
 PhantomClaw/
 ├── phantomclaw.exe          ← The bot (after you build it)
-├── config.yaml              ← Your settings
+├── config.yaml              ← Your settings (providers, risk, sessions)
+├── V2_BLUEPRINT.md          ← V2 upgrade roadmap
 ├── ea/
 │   └── PhantomClaw.mq5      ← MT5 Expert Advisor (copy to MT5)
 ├── data/
 │   ├── phantom.db            ← Memory database (auto-created)
+│   ├── sessions/             ← Conversation history (JSONL, auto-created)
+│   │   └── 2026-03-02.jsonl  ← Today's turns
 │   └── logs/
 │       └── phantomclaw.log   ← Log file (auto-created)
 ├── cmd/phantomclaw/
 │   └── main.go               ← Entry point
 ├── internal/                  ← All the brain code
-│   ├── agent/                 ← The AI decision engine
+│   ├── agent/                 ← The AI decision engine (ReAct loop)
 │   ├── bridge/                ← MT5 communication
-│   ├── llm/                   ← AI provider connections
+│   ├── llm/                   ← AI providers + smart router
+│   │   ├── generic.go         ← OpenAI-compatible adapter
+│   │   ├── errors.go          ← Error classifier
+│   │   └── router.go          ← Smart router with cooldown
 │   ├── memory/                ← Database & learning
+│   │   └── session.go         ← Conversation history (JSONL)
+│   ├── scheduler/             ← Session cron + heartbeat
+│   │   └── heartbeat.go       ← Health monitoring
+│   ├── skills/                ← Agent tools
+│   │   ├── mvp.go             ← Trading tools
+│   │   ├── cron.go            ← Self-scheduling tool
+│   │   └── web.go             ← Web search + fetch
 │   ├── risk/                  ← Safety guardrails
 │   └── ...
 └── PRD.md                     ← Product Requirements Document
