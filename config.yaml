@@ -14,19 +14,53 @@ telegram:
   chat_id: 0                    # Your Telegram user/chat ID
 
 llm:
-  primary: claude               # claude | openai | gemini | deepseek
-  claude:
-    api_key: ""                 # Set via PHANTOM_LLM_CLAUDE_API_KEY
-    model: claude-sonnet-4-20250514
-  openai:
-    api_key: ""                 # Set via PHANTOM_LLM_OPENAI_API_KEY
-    model: gpt-4o
-  gemini:
-    api_key: ""                 # Set via PHANTOM_LLM_GEMINI_API_KEY
-    model: gemini-2.5-flash
-  deepseek:
-    api_key: ""                 # Set via PHANTOM_LLM_DEEPSEEK_API_KEY
-    model: deepseek-chat
+  primary: claude               # Provider name or alias (e.g. "claude", "fast", "cheap")
+
+  # Model aliases — shortcuts for quick switching via Telegram
+  aliases:
+    fast: groq                  # /mode fast → uses Groq (500+ tok/sec)
+    cheap: deepseek             # /mode cheap → uses DeepSeek
+    smart: claude               # /mode smart → uses Claude
+    local: ollama               # /mode local → uses local Ollama
+
+  # Providers — ordered list. Add any OpenAI-compatible provider here.
+  # Types: "claude" (Anthropic API), "openai" (OpenAI SDK), "openai_compat" (any /v1/chat/completions)
+  providers:
+    - name: claude
+      type: claude
+      api_key: ""               # Set via PHANTOM_LLM_PROVIDERS_0_API_KEY
+      model: claude-sonnet-4-20250514
+
+    - name: openai
+      type: openai
+      api_key: ""               # Set via PHANTOM_LLM_PROVIDERS_1_API_KEY
+      model: gpt-4o
+
+    - name: deepseek
+      type: openai_compat
+      base_url: "https://api.deepseek.com/v1"
+      api_key: ""               # Set via PHANTOM_LLM_PROVIDERS_2_API_KEY
+      model: deepseek-chat
+
+    # --- Add new providers below (uncomment to activate) ---
+
+    # - name: groq
+    #   type: openai_compat
+    #   base_url: "https://api.groq.com/openai/v1"
+    #   api_key: ""
+    #   model: llama-3.3-70b-versatile
+
+    # - name: openrouter
+    #   type: openai_compat
+    #   base_url: "https://openrouter.ai/api/v1"
+    #   api_key: ""
+    #   model: anthropic/claude-sonnet-4
+
+    # - name: ollama
+    #   type: openai_compat
+    #   base_url: "http://localhost:11434/v1"
+    #   api_key: "ollama"
+    #   model: qwen3
 
 bridge:
   host: "127.0.0.1"

@@ -34,19 +34,20 @@ type TelegramConfig struct {
 	ChatID int64  `mapstructure:"chat_id"`
 }
 
-// LLMConfig holds LLM provider API keys and settings.
+// LLMConfig holds LLM provider configuration.
 type LLMConfig struct {
-	Primary  string           `mapstructure:"primary"` // claude | openai | gemini | deepseek
-	Claude   LLMProviderCreds `mapstructure:"claude"`
-	OpenAI   LLMProviderCreds `mapstructure:"openai"`
-	Gemini   LLMProviderCreds `mapstructure:"gemini"`
-	DeepSeek LLMProviderCreds `mapstructure:"deepseek"`
+	Primary   string             `mapstructure:"primary"`   // provider name or alias
+	Providers []LLMProviderEntry `mapstructure:"providers"` // ordered list of providers
+	Aliases   map[string]string  `mapstructure:"aliases"`   // "fast" → "groq"
 }
 
-// LLMProviderCreds holds API credentials for a single LLM provider.
-type LLMProviderCreds struct {
-	APIKey string `mapstructure:"api_key"`
-	Model  string `mapstructure:"model"`
+// LLMProviderEntry holds config for a single LLM provider.
+type LLMProviderEntry struct {
+	Name    string `mapstructure:"name"`     // unique identifier (e.g. "groq", "ollama")
+	Type    string `mapstructure:"type"`     // "openai_compat" | "claude" | "openai"
+	BaseURL string `mapstructure:"base_url"` // API base URL (required for openai_compat)
+	APIKey  string `mapstructure:"api_key"`
+	Model   string `mapstructure:"model"`
 }
 
 // BridgeConfig holds MT5 EA REST bridge settings.
@@ -126,10 +127,6 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("memory.log_dir", "data/logs")
 
 	v.SetDefault("llm.primary", "claude")
-	v.SetDefault("llm.claude.model", "claude-sonnet-4-20250514")
-	v.SetDefault("llm.openai.model", "gpt-4o")
-	v.SetDefault("llm.gemini.model", "gemini-2.5-flash")
-	v.SetDefault("llm.deepseek.model", "deepseek-chat")
 
 	v.SetDefault("pairs", []string{"XAUUSD", "EURUSD", "USDJPY", "GBPUSD"})
 
