@@ -25,6 +25,7 @@ go.work.sum
 config.yaml
 config.local.yaml
 !config.example.yaml
+config.yaml.bak.*
 
 # Environment
 .env

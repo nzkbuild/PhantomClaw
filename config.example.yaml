@@ -65,6 +65,7 @@ bridge:
   host: "127.0.0.1"
   port: 8765
   auth_token: "" # Optional shared secret header for EA bridge (X-Phantom-Bridge-Token)
+  signal_timeout_ms: 10000 # Signal processing timeout for agent decision path
 
 market:
   fail_policy: "fail_open" # fail_open | fail_closed

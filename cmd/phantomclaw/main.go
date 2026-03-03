@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -32,7 +33,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var version = "2.0.0"
+var version = "3.0.0"
 
 type alertSender interface {
 	Send(ctx context.Context, text string)
@@ -44,6 +45,108 @@ func makeSessionAlertSender(sender alertSender, logger *zap.SugaredLogger) func(
 		if sender != nil {
 			sender.Send(ctx, text)
 		}
+	}
+}
+
+func makeBridgeProbe(baseURL, authToken string) telegram.BridgeProbeFunc {
+	return func(ctx context.Context) (telegram.BridgeProbeResult, error) {
+		client := &http.Client{Timeout: 1500 * time.Millisecond}
+		out := telegram.BridgeProbeResult{}
+
+		healthReq, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/health", nil)
+		if err != nil {
+			return out, err
+		}
+		healthResp, err := client.Do(healthReq)
+		if err != nil {
+			return out, err
+		}
+		defer healthResp.Body.Close()
+		if healthResp.StatusCode != http.StatusOK {
+			return out, fmt.Errorf("health status %d", healthResp.StatusCode)
+		}
+
+		var healthPayload struct {
+			Status   string `json:"status"`
+			Service  string `json:"service"`
+			Version  string `json:"version"`
+			Contract string `json:"contract"`
+		}
+		if err := json.NewDecoder(healthResp.Body).Decode(&healthPayload); err != nil {
+			return out, err
+		}
+		if strings.ToLower(strings.TrimSpace(healthPayload.Status)) != "ok" {
+			return out, fmt.Errorf("health status=%q", healthPayload.Status)
+		}
+		out.Service = healthPayload.Service
+		out.Version = healthPayload.Version
+		out.Contract = healthPayload.Contract
+
+		accountReq, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/account", nil)
+		if err != nil {
+			return out, err
+		}
+		if strings.TrimSpace(authToken) != "" {
+			accountReq.Header.Set("X-Phantom-Bridge-Token", authToken)
+		}
+		if strings.TrimSpace(out.Contract) != "" {
+			accountReq.Header.Set("X-Phantom-Bridge-Contract", out.Contract)
+		}
+
+		accountResp, err := client.Do(accountReq)
+		if err != nil {
+			return out, err
+		}
+		defer accountResp.Body.Close()
+		if accountResp.StatusCode == http.StatusNotFound {
+			return out, nil
+		}
+		if accountResp.StatusCode == http.StatusUnauthorized {
+			return out, errors.New("account unauthorized (bridge token mismatch)")
+		}
+		if accountResp.StatusCode != http.StatusOK {
+			return out, fmt.Errorf("account status %d", accountResp.StatusCode)
+		}
+
+		var accountPayload struct {
+			OpenPositions int    `json:"open_positions"`
+			Timestamp     string `json:"timestamp"`
+		}
+		if err := json.NewDecoder(accountResp.Body).Decode(&accountPayload); err != nil {
+			return out, err
+		}
+		out.EAConnected = true
+		out.EATimestamp = accountPayload.Timestamp
+		out.OpenPositions = accountPayload.OpenPositions
+		return out, nil
+	}
+}
+
+func makeRuntimeDiag(baseURL, authToken string, providerCount int, db *memory.DB) telegram.RuntimeDiagFunc {
+	probe := makeBridgeProbe(baseURL, authToken)
+	return func(ctx context.Context) (string, error) {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("LLM providers configured: %d\n", providerCount))
+		sb.WriteString(fmt.Sprintf("Bridge auth enabled: %t\n", strings.TrimSpace(authToken) != ""))
+
+		if db != nil {
+			if jobs, err := db.ListPendingCronJobs(); err == nil {
+				sb.WriteString(fmt.Sprintf("Pending cron jobs: %d\n", len(jobs)))
+			}
+		}
+
+		result, err := probe(ctx)
+		if err != nil {
+			sb.WriteString(fmt.Sprintf("Bridge probe: error (%v)\n", err))
+			return sb.String(), nil
+		}
+		sb.WriteString(fmt.Sprintf("Bridge service: %s v%s (contract=%s)\n", result.Service, result.Version, result.Contract))
+		if result.EAConnected {
+			sb.WriteString(fmt.Sprintf("EA snapshot: connected (%s, open_positions=%d)\n", result.EATimestamp, result.OpenPositions))
+		} else {
+			sb.WriteString("EA snapshot: waiting for first snapshot\n")
+		}
+		return sb.String(), nil
 	}
 }
 
@@ -350,18 +453,22 @@ func main() {
 		db,
 		bridgeAuthToken,
 	)
+	bridgeServer.SetSignalTimeout(cfg.Bridge.SignalTimeoutDuration())
+	logger.Infow("bridge: signal timeout configured", "timeout_ms", cfg.Bridge.SignalTimeoutDuration().Milliseconds())
 
 	// --- Telegram bot ---
 	var tgBot *telegram.Bot
 	if cfg.Telegram.Token != "" {
 		tgBot, err = telegram.New(cfg.Telegram.Token, cfg.Telegram.ChatID, telegram.Dependencies{
-			Safety:    safetyMgr,
-			Risk:      riskEngine,
-			Scheduler: sched,
-			Memory:    db,
-			Diary:     diaryWriter,
-			Strategy:  strategyMgr,
-			Chat:      brain,
+			Safety:      safetyMgr,
+			Risk:        riskEngine,
+			Scheduler:   sched,
+			Memory:      db,
+			Diary:       diaryWriter,
+			Strategy:    strategyMgr,
+			Chat:        brain,
+			BridgeProbe: makeBridgeProbe(bridgeURL, bridgeAuthToken),
+			Diag:        makeRuntimeDiag(bridgeURL, bridgeAuthToken, len(providers), db),
 		})
 		if err != nil {
 			logger.Fatalf("telegram: %v", err)

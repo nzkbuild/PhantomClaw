@@ -60,9 +60,18 @@ type LLMProviderEntry struct {
 
 // BridgeConfig holds MT5 EA REST bridge settings.
 type BridgeConfig struct {
-	Host      string `mapstructure:"host"`
-	Port      int    `mapstructure:"port"`
-	AuthToken string `mapstructure:"auth_token"`
+	Host            string `mapstructure:"host"`
+	Port            int    `mapstructure:"port"`
+	AuthToken       string `mapstructure:"auth_token"`
+	SignalTimeoutMs int    `mapstructure:"signal_timeout_ms"`
+}
+
+// SignalTimeoutDuration returns the configured bridge signal timeout.
+func (b BridgeConfig) SignalTimeoutDuration() time.Duration {
+	if b.SignalTimeoutMs <= 0 {
+		return 10 * time.Second
+	}
+	return time.Duration(b.SignalTimeoutMs) * time.Millisecond
 }
 
 // MarketConfig holds market-data behavior settings.
@@ -124,6 +133,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("bridge.host", "127.0.0.1")
 	v.SetDefault("bridge.port", 8765)
 	v.SetDefault("bridge.auth_token", "")
+	v.SetDefault("bridge.signal_timeout_ms", 10000)
 	v.SetDefault("market.fail_policy", "fail_open")
 
 	v.SetDefault("risk.max_lot_size", 0.10)

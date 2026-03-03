@@ -21,19 +21,37 @@ import (
 
 // Dependencies holds references to subsystems for command handlers.
 type Dependencies struct {
-	Safety    *safety.Manager
-	Risk      *risk.Engine
-	Scheduler *scheduler.Scheduler
-	Memory    *memory.DB
-	Diary     *memory.DiaryWriter
-	Strategy  *memory.StrategyManager
-	Chat      ChatResponder
+	Safety      *safety.Manager
+	Risk        *risk.Engine
+	Scheduler   *scheduler.Scheduler
+	Memory      *memory.DB
+	Diary       *memory.DiaryWriter
+	Strategy    *memory.StrategyManager
+	Chat        ChatResponder
+	BridgeProbe BridgeProbeFunc
+	Diag        RuntimeDiagFunc
 }
 
 // ChatResponder handles free-form chat messages when chat mode is enabled.
 type ChatResponder interface {
 	HandleChat(ctx context.Context, userText string) (string, error)
 }
+
+// BridgeProbeResult summarizes bridge + EA connectivity diagnostics.
+type BridgeProbeResult struct {
+	Service       string
+	Version       string
+	Contract      string
+	EAConnected   bool
+	EATimestamp   string
+	OpenPositions int
+}
+
+// BridgeProbeFunc probes runtime bridge/EA connectivity.
+type BridgeProbeFunc func(ctx context.Context) (BridgeProbeResult, error)
+
+// RuntimeDiagFunc reports extended runtime diagnostics.
+type RuntimeDiagFunc func(ctx context.Context) (string, error)
 
 // Bot wraps the Telegram bot and handles command dispatch.
 type Bot struct {
@@ -73,6 +91,9 @@ func New(token string, chatID int64, deps Dependencies) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleStart))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/halt", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleHalt))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/mode", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleMode))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/auto", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleAuto))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/observe", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleObserve))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/suggest", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleSuggest))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/report", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleReport))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/pairs", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handlePairs))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/pending", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handlePending))
@@ -80,6 +101,8 @@ func New(token string, chatID int64, deps Dependencies) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/config", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleConfig))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/rollback", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleRollback))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/chat", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleChatMode))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/handshake", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleHandshake))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/diag", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleDiag))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleHelp))
 
 	tb.b = b
@@ -101,25 +124,16 @@ func (tb *Bot) Send(ctx context.Context, text string) {
 }
 
 // sendReply sends a Telegram message and logs failures.
-// If markdown send fails, it retries once as plain text.
+// Markdown mode uses escaped MarkdownV2 to avoid parser errors.
 func (tb *Bot) sendReply(ctx context.Context, b *bot.Bot, chatID int64, text string, markdown bool) {
 	base := &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   text,
 	}
 
-	// Strategy 1: original content with legacy Markdown mode.
+	// Strategy 1: escaped MarkdownV2 for parser compatibility.
 	if markdown {
 		params := *base
-		params.ParseMode = models.ParseModeMarkdown
-		if _, err := b.SendMessage(ctx, &params); err == nil {
-			return
-		} else {
-			log.Printf("telegram: send markdown failed chat_id=%d err=%v", chatID, err)
-		}
-
-		// Strategy 2: escaped MarkdownV2 for stricter parser compatibility.
-		params = *base
 		params.ParseMode = "MarkdownV2"
 		params.Text = escapeMarkdownV2(text)
 		if _, err := b.SendMessage(ctx, &params); err == nil {
@@ -129,7 +143,7 @@ func (tb *Bot) sendReply(ctx context.Context, b *bot.Bot, chatID int64, text str
 		}
 	}
 
-	// Strategy 3: plain text fallback.
+	// Strategy 2: plain text fallback.
 	params := *base
 	params.ParseMode = ""
 	params.Text = markdownToPlain(text)
@@ -261,14 +275,35 @@ func (tb *Bot) handleMode(ctx context.Context, b *bot.Bot, update *models.Update
 		return
 	}
 
+	tb.applyMode(mode)
+	tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("✅ Mode switched to: %s", tb.deps.Safety.StatusText()), false)
+}
+
+func (tb *Bot) handleAuto(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/auto", update)
+	tb.applyMode(safety.ModeAuto)
+	tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("✅ Mode switched to: %s", tb.deps.Safety.StatusText()), false)
+}
+
+func (tb *Bot) handleObserve(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/observe", update)
+	tb.applyMode(safety.ModeObserve)
+	tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("✅ Mode switched to: %s", tb.deps.Safety.StatusText()), false)
+}
+
+func (tb *Bot) handleSuggest(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/suggest", update)
+	tb.applyMode(safety.ModeSuggest)
+	tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("✅ Mode switched to: %s", tb.deps.Safety.StatusText()), false)
+}
+
+func (tb *Bot) applyMode(mode safety.Mode) {
 	tb.deps.Safety.SetMode(mode)
 	if mode == safety.ModeHalt {
 		tb.deps.Risk.SetHalted(true)
-	} else {
-		tb.deps.Risk.SetHalted(false)
+		return
 	}
-
-	tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("✅ Mode switched to: %s", tb.deps.Safety.StatusText()), true)
+	tb.deps.Risk.SetHalted(false)
 }
 
 func (tb *Bot) handleReport(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -417,6 +452,7 @@ func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update
 	msg := "🤖 *PhantomClaw Commands*\n\n" +
 		"`/status` — Mode, positions, PnL, session\n" +
 		"`/mode observe|suggest|auto|halt` — Switch mode\n" +
+		"`/auto` `/observe` `/suggest` — Quick mode aliases\n" +
 		"`/halt` — Emergency stop\n" +
 		"`/report` — Daily summary + diary\n" +
 		"`/pairs` — Active pairs + bias\n" +
@@ -424,10 +460,83 @@ func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update
 		"`/confidence` — Current confidence score\n" +
 		"`/rollback [N]` — Strategy versions / rollback\n" +
 		"`/chat on|off|status` — Toggle intelligent chat replies\n" +
+		"`/handshake` — Verify Telegram, bridge, and EA connectivity\n" +
+		"`/diag` — Extended runtime diagnostics\n" +
 		"`/config` — Risk config\n" +
 		"`/help` — This message"
 
-	tb.sendReply(ctx, b, update.Message.Chat.ID, msg, true)
+	tb.sendReply(ctx, b, update.Message.Chat.ID, msg, false)
+}
+
+func (tb *Bot) handleHandshake(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/handshake", update)
+
+	var sb strings.Builder
+	sb.WriteString("Handshake Check\n\n")
+	sb.WriteString("Telegram: connected (command received)\n")
+
+	if tb.deps.BridgeProbe == nil {
+		sb.WriteString("Server: probe unavailable\n")
+		sb.WriteString("EA -> Server: unknown\n")
+		tb.sendReply(ctx, b, update.Message.Chat.ID, sb.String(), false)
+		return
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	result, err := tb.deps.BridgeProbe(probeCtx)
+	if err != nil {
+		sb.WriteString(fmt.Sprintf("Server: probe failed (%v)\n", err))
+		sb.WriteString("EA -> Server: unknown\n")
+		tb.sendReply(ctx, b, update.Message.Chat.ID, sb.String(), false)
+		return
+	}
+
+	sb.WriteString(fmt.Sprintf("Server: connected (%s v%s, contract=%s)\n", result.Service, result.Version, result.Contract))
+	if result.EAConnected {
+		sb.WriteString(fmt.Sprintf("EA -> Server: connected (last snapshot %s, open_positions=%d)\n", result.EATimestamp, result.OpenPositions))
+	} else {
+		sb.WriteString("EA -> Server: waiting for first snapshot\n")
+	}
+
+	tb.sendReply(ctx, b, update.Message.Chat.ID, sb.String(), false)
+}
+
+func (tb *Bot) handleDiag(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/diag", update)
+
+	stats := tb.deps.Risk.Stats()
+	var sb strings.Builder
+	sb.WriteString("Diagnostics\n\n")
+	sb.WriteString(fmt.Sprintf("Mode: %s\n", tb.deps.Safety.CurrentMode()))
+	sb.WriteString(fmt.Sprintf("Session: %s\n", tb.deps.Scheduler.CurrentSession()))
+	sb.WriteString(fmt.Sprintf("Open positions: %d/%d\n", stats.OpenPositions, stats.MaxPositions))
+	sb.WriteString(fmt.Sprintf("Daily loss: %.2f\n", stats.DailyLoss))
+	sb.WriteString(fmt.Sprintf("Chat mode: %t\n", tb.isChatModeEnabled()))
+
+	if tb.deps.Memory != nil {
+		if entries, err := tb.deps.Memory.ListActivePendingDecisions(20); err == nil {
+			sb.WriteString(fmt.Sprintf("Pending decision queue: %d\n", len(entries)))
+		}
+	}
+
+	if tb.deps.Diag != nil {
+		diagCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		extra, err := tb.deps.Diag(diagCtx)
+		if err != nil {
+			sb.WriteString(fmt.Sprintf("Diag source: error (%v)\n", err))
+		} else if strings.TrimSpace(extra) != "" {
+			sb.WriteString("\n")
+			sb.WriteString(extra)
+			if !strings.HasSuffix(extra, "\n") {
+				sb.WriteString("\n")
+			}
+		}
+	}
+
+	tb.sendReply(ctx, b, update.Message.Chat.ID, sb.String(), false)
 }
 
 func (tb *Bot) handleChatMode(ctx context.Context, b *bot.Bot, update *models.Update) {

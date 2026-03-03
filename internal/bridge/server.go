@@ -15,7 +15,7 @@ import (
 	"github.com/nzkbuild/PhantomClaw/internal/memory"
 )
 
-const defaultSignalHandlerTimeout = 1500 * time.Millisecond
+const defaultSignalHandlerTimeout = 10 * time.Second
 const bridgeAuthHeader = "X-Phantom-Bridge-Token"
 const contractVersionHeader = "X-Phantom-Bridge-Contract"
 
@@ -177,6 +177,14 @@ func (s *Server) Start() error {
 // Stop gracefully shuts down the bridge server.
 func (s *Server) Stop() error {
 	return s.server.Close()
+}
+
+// SetSignalTimeout overrides the default signal processing timeout.
+func (s *Server) SetSignalTimeout(timeout time.Duration) {
+	if timeout <= 0 {
+		return
+	}
+	s.signalTimeout = timeout
 }
 
 // handleSignal processes POST /signal from EA.
