@@ -104,6 +104,7 @@ func New(token string, chatID int64, deps Dependencies) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/pending", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handlePending))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/confidence", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleConfidence))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/provider", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleProvider))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/model", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleModel))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/config", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleConfig))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/rollback", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleRollback))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/chat", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleChatMode))
@@ -467,6 +468,67 @@ func (tb *Bot) handleProvider(ctx context.Context, b *bot.Bot, update *models.Up
 	tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("✅ LLM provider switched. Active provider: %s", active), false)
 }
 
+func (tb *Bot) handleModel(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/model", update)
+	if tb.deps.LLMCurrent == nil {
+		tb.sendReply(ctx, b, update.Message.Chat.ID, "❌ Model control unavailable: LLM router not configured.", false)
+		return
+	}
+
+	parts := strings.Fields(update.Message.Text)
+	usage := "Usage: /model [status|list] | /model set <provider_or_alias[:model]>"
+	if len(parts) < 2 || strings.EqualFold(parts[1], "status") || strings.EqualFold(parts[1], "list") {
+		current := tb.deps.LLMCurrent()
+		if strings.TrimSpace(current) == "" {
+			current = "unknown"
+		}
+
+		var sb strings.Builder
+		sb.WriteString("LLM Models\n\n")
+		sb.WriteString(fmt.Sprintf("Current provider/model target: %s\n", current))
+		sb.WriteString(fmt.Sprintf("Sticky primary: %t\n", tb.deps.LLMSticky))
+
+		if tb.deps.LLMStatus != nil {
+			status := tb.deps.LLMStatus()
+			if len(status) > 0 {
+				keys := make([]string, 0, len(status))
+				for k := range status {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				sb.WriteString("\nConfigured targets:\n")
+				for _, k := range keys {
+					sb.WriteString(fmt.Sprintf("- %s: %s\n", k, status[k]))
+				}
+			}
+		}
+		sb.WriteString("\n")
+		sb.WriteString(usage)
+		tb.sendReply(ctx, b, update.Message.Chat.ID, sb.String(), false)
+		return
+	}
+
+	if !strings.EqualFold(parts[1], "set") {
+		tb.sendReply(ctx, b, update.Message.Chat.ID, usage, false)
+		return
+	}
+	if len(parts) < 3 {
+		tb.sendReply(ctx, b, update.Message.Chat.ID, usage, false)
+		return
+	}
+	if tb.deps.LLMSwitch == nil {
+		tb.sendReply(ctx, b, update.Message.Chat.ID, "❌ Model switching unavailable in current runtime.", false)
+		return
+	}
+
+	active, err := tb.deps.LLMSwitch(parts[2])
+	if err != nil {
+		tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("❌ Model switch failed: %v", err), false)
+		return
+	}
+	tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("✅ Model target switched. Active provider/model target: %s", active), false)
+}
+
 func (tb *Bot) handleRollback(ctx context.Context, b *bot.Bot, update *models.Update) {
 	logInbound("/rollback", update)
 	if tb.deps.Strategy == nil {
@@ -513,6 +575,7 @@ func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update
 		"`/auto` `/observe` `/suggest` — Quick mode aliases\n" +
 		"`/halt` — Emergency stop\n" +
 		"`/provider [status|name]` — Show or switch LLM provider\n" +
+		"`/model [status|list|set <provider[:model]>]` — Runtime model/provider target control\n" +
 		"`/report` — Daily summary + diary\n" +
 		"`/pairs` — Active pairs + bias\n" +
 		"`/pending` — Pending orders (check MT5)\n" +

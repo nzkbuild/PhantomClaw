@@ -226,6 +226,54 @@ func (r *Router) ProviderStatus() map[string]string {
 	return status
 }
 
+// SetStickyPrimary toggles sticky-primary behavior at runtime.
+func (r *Router) SetStickyPrimary(enabled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stickyPrimary = enabled
+}
+
+// SetAliases replaces alias mapping at runtime.
+func (r *Router) SetAliases(aliases map[string]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if aliases == nil {
+		r.aliases = map[string]string{}
+		return
+	}
+	next := make(map[string]string, len(aliases))
+	for k, v := range aliases {
+		next[k] = v
+	}
+	r.aliases = next
+}
+
+// SetProviders replaces provider order/runtime set.
+func (r *Router) SetProviders(providers []Provider) {
+	if len(providers) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	nextProviders := append([]Provider(nil), providers...)
+	nextFailures := make(map[string]int, len(nextProviders))
+	nextCooldowns := make(map[string]time.Time, len(nextProviders))
+	for _, p := range nextProviders {
+		name := p.Name()
+		if count, ok := r.failures[name]; ok {
+			nextFailures[name] = count
+		}
+		if expiry, ok := r.cooldowns[name]; ok && time.Now().Before(expiry) {
+			nextCooldowns[name] = expiry
+		}
+	}
+
+	r.providers = nextProviders
+	r.failures = nextFailures
+	r.cooldowns = nextCooldowns
+}
+
 // --- Internal helpers ---
 
 func (r *Router) handleFailure(provider string, err error) {

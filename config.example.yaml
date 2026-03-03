@@ -1,14 +1,3 @@
-# PhantomClaw Configuration (Safe Example)
-# ----------------------------------------
-# Keep secrets in environment variables (recommended):
-#   PHANTOM_TELEGRAM_TOKEN
-#   PHANTOM_TELEGRAM_CHAT_ID
-#   PHANTOM_BRIDGE_AUTH_TOKEN
-#   PHANTOM_MARKET_FAIL_POLICY
-#   PHANTOM_LLM_PROVIDERS_0_API_KEY
-#   PHANTOM_LLM_PROVIDERS_1_API_KEY
-#   PHANTOM_LLM_PROVIDERS_2_API_KEY
-
 bot:
   name: PhantomClaw
   mode: OBSERVE
@@ -16,57 +5,75 @@ bot:
   log_level: info
 
 telegram:
-  token: ""
-  chat_id: 0
+  token: "" # use PHANTOM_TELEGRAM_TOKEN or .secrets
+  chat_id: 0 # use PHANTOM_TELEGRAM_CHAT_ID or .secrets
 
 llm:
   primary: claude
-  sticky_primary: true # true = use only selected primary provider unless user changes it
+  sticky_primary: true
   aliases:
+    smart: claude
     fast: groq
     cheap: deepseek
-    smart: claude
     local: ollama
+
   providers:
     - name: claude
       type: claude
-      api_key: ""
+      api_key: "" # PHANTOM_LLM_PROVIDERS_0_API_KEY
       model: claude-sonnet-4-20250514
 
     - name: openai
       type: openai
-      api_key: ""
+      api_key: "" # PHANTOM_LLM_PROVIDERS_1_API_KEY
       model: gpt-4o
+
+    - name: openrouter
+      type: openai_compat
+      base_url: "https://openrouter.ai/api/v1"
+      api_key: "" # PHANTOM_LLM_PROVIDERS_2_API_KEY
+      model: anthropic/claude-sonnet-4
+
+    - name: groq
+      type: openai_compat
+      base_url: "https://api.groq.com/openai/v1"
+      api_key: "" # PHANTOM_LLM_PROVIDERS_3_API_KEY
+      model: llama-3.3-70b-versatile
+      allowed_tools:
+        - confidence_score
+        - spread_filter
+        - correlation_guard
+
+    - name: mistral
+      type: openai_compat
+      base_url: "https://api.mistral.ai/v1"
+      api_key: "" # PHANTOM_LLM_PROVIDERS_4_API_KEY
+      model: mistral-large-latest
 
     - name: deepseek
       type: openai_compat
       base_url: "https://api.deepseek.com/v1"
-      api_key: ""
+      api_key: "" # PHANTOM_LLM_PROVIDERS_5_API_KEY
       model: deepseek-chat
+      allowed_tools:
+        - confidence_score
+        - spread_filter
 
-    # - name: groq
-    #   type: openai_compat
-    #   base_url: "https://api.groq.com/openai/v1"
-    #   api_key: ""
-    #   model: llama-3.3-70b-versatile
-
-    # - name: openrouter
-    #   type: openai_compat
-    #   base_url: "https://openrouter.ai/api/v1"
-    #   api_key: ""
-    #   model: anthropic/claude-sonnet-4
-
-    # - name: ollama
-    #   type: openai_compat
-    #   base_url: "http://localhost:11434/v1"
-    #   api_key: "ollama"
-    #   model: qwen3
+    - name: ollama
+      type: openai_compat
+      base_url: "http://localhost:11434/v1"
+      api_key: "ollama"
+      model: qwen3
+      allowed_tools:
+        - confidence_score
+        - spread_filter
+        - correlation_guard
 
 bridge:
   host: "127.0.0.1"
   port: 8765
-  auth_token: "" # Optional shared secret header for EA bridge (X-Phantom-Bridge-Token)
-  signal_timeout_ms: 30000 # Signal processing timeout for agent decision path
+  auth_token: "" # use PHANTOM_BRIDGE_AUTH_TOKEN or .secrets
+  signal_timeout_ms: 30000
 
 market:
   fail_policy: "fail_open" # fail_open | fail_closed

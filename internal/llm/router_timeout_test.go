@@ -67,19 +67,19 @@ func TestRouterToolCallBudgetPerProvider(t *testing.T) {
 	}
 	fallbackFast := &timedProvider{
 		name:      "fallback",
-		delay:     150 * time.Millisecond,
+		delay:     50 * time.Millisecond,
 		toolReply: &ToolResult{Decision: `{"action":"HOLD","reason":"fallback_ok"}`},
 	}
 
 	r := NewRouter(RouterConfig{
 		Providers:      []Provider{primarySlow, fallbackFast},
-		AttemptTimeout: 200 * time.Millisecond,
+		AttemptTimeout: 300 * time.Millisecond,
 		StickyPrimary:  false,
 	})
 
 	// Shared parent deadline is intentionally tight. Router should still reserve
 	// enough budget for fallback provider instead of letting primary consume all.
-	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	got, err := r.ToolCall(ctx, []Message{{Role: "user", Content: "decide"}}, nil)

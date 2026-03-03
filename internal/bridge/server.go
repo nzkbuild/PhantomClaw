@@ -111,13 +111,14 @@ type AccountSnapshot struct {
 
 // Server is the HTTP REST bridge between PhantomClaw and MT5 EA.
 type Server struct {
-	host          string
-	port          int
-	server        *http.Server
-	onSignal      SignalHandler
-	onTradeResult TradeResultHandler
-	db            *memory.DB
-	authToken     string
+	host           string
+	port           int
+	server         *http.Server
+	onSignal       SignalHandler
+	onTradeResult  TradeResultHandler
+	db             *memory.DB
+	authToken      string
+	modelsProvider func() any
 
 	mu               sync.RWMutex
 	latestBySymbol   map[string]SignalRequest
@@ -152,6 +153,7 @@ func NewServer(host string, port int, onSignal SignalHandler, onTradeResult Trad
 	mux.HandleFunc("POST /decision/consume", s.handleDecisionConsume)
 	mux.HandleFunc("POST /trade-result", s.handleTradeResult)
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /models", s.handleModels)
 	mux.HandleFunc("GET /price", s.handlePrice)
 	mux.HandleFunc("GET /account", s.handleAccount)
 	mux.HandleFunc("GET /admin/jobs", s.handleAdminJobs)
@@ -184,7 +186,23 @@ func (s *Server) SetSignalTimeout(timeout time.Duration) {
 	if timeout <= 0 {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.signalTimeout = timeout
+}
+
+// SetAuthToken updates bridge auth token at runtime.
+func (s *Server) SetAuthToken(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.authToken = strings.TrimSpace(token)
+}
+
+// SetModelsProvider wires a callback for GET /models payload.
+func (s *Server) SetModelsProvider(provider func() any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.modelsProvider = provider
 }
 
 // handleSignal processes POST /signal from EA.
@@ -529,6 +547,37 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
+// handleModels returns runtime model/provider inventory.
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if !s.requireCompatibleContract(w, r) {
+		return
+	}
+
+	s.mu.RLock()
+	provider := s.modelsProvider
+	s.mu.RUnlock()
+
+	out := map[string]any{
+		"status": "ok",
+	}
+	if provider != nil {
+		out["data"] = provider()
+	} else {
+		out["data"] = map[string]any{
+			"current_provider": "",
+			"providers":        []any{},
+			"aliases":          map[string]string{},
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
 // handlePrice returns the latest MT5 snapshot for a symbol.
 func (s *Server) handlePrice(w http.ResponseWriter, r *http.Request) {
 	s.setProtocolHeaders(w)
@@ -643,12 +692,16 @@ func (s *Server) handleAdminQueue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
-	if s.authToken == "" {
+	s.mu.RLock()
+	tokenExpected := s.authToken
+	s.mu.RUnlock()
+
+	if tokenExpected == "" {
 		return true
 	}
 
 	token := strings.TrimSpace(r.Header.Get(bridgeAuthHeader))
-	if subtle.ConstantTimeCompare([]byte(token), []byte(s.authToken)) == 1 {
+	if subtle.ConstantTimeCompare([]byte(token), []byte(tokenExpected)) == 1 {
 		return true
 	}
 

@@ -44,6 +44,7 @@ type Agent struct {
 	strategy    *memory.StrategyManager
 	echo        *memory.EchoRecall
 	diary       *memory.DiaryWriter
+	toolPolicy  map[string]map[string]struct{} // provider -> allowed tool names (lower-case)
 }
 
 // Deps holds all agent dependencies for clean construction.
@@ -64,10 +65,32 @@ type Deps struct {
 	Strategy    *memory.StrategyManager
 	Echo        *memory.EchoRecall
 	Diary       *memory.DiaryWriter
+	ToolPolicy  map[string][]string
 }
 
 // New creates the agent brain with all dependencies.
 func New(d Deps) *Agent {
+	policy := make(map[string]map[string]struct{})
+	for provider, tools := range d.ToolPolicy {
+		if len(tools) == 0 {
+			continue
+		}
+		name := normalizeProviderName(provider)
+		if name == "" {
+			continue
+		}
+		if _, ok := policy[name]; !ok {
+			policy[name] = make(map[string]struct{}, len(tools))
+		}
+		for _, tool := range tools {
+			normalized := strings.ToLower(strings.TrimSpace(tool))
+			if normalized == "" {
+				continue
+			}
+			policy[name][normalized] = struct{}{}
+		}
+	}
+
 	return &Agent{
 		llm:         d.LLM,
 		skills:      d.Skills,
@@ -85,6 +108,7 @@ func New(d Deps) *Agent {
 		strategy:    d.Strategy,
 		echo:        d.Echo,
 		diary:       d.Diary,
+		toolPolicy:  policy,
 	}
 }
 
@@ -117,9 +141,6 @@ func (a *Agent) HandleSignal(ctx context.Context, req *bridge.SignalRequest) *br
 	// Build context-injected prompt
 	prompt := a.buildPrompt(req)
 
-	// Build tool definitions for LLM
-	tools := a.buildToolDefs()
-
 	// ReAct loop: Think → Tool Call → Observe → Decide
 	messages := []llm.Message{
 		{Role: "system", Content: prompt.systemPrompt},
@@ -131,6 +152,8 @@ func (a *Agent) HandleSignal(ctx context.Context, req *bridge.SignalRequest) *br
 	var callHistory []callRecord
 
 	for round := 0; round < maxToolRounds; round++ {
+		providerName := normalizeProviderName(a.llm.Name())
+		tools := a.buildToolDefsForProvider(providerName)
 		result, err := a.llm.ToolCall(ctx, messages, tools)
 		if err != nil {
 			log.Printf("agent: LLM error on round %d: %v", round, err)
@@ -158,9 +181,16 @@ func (a *Agent) HandleSignal(ctx context.Context, req *bridge.SignalRequest) *br
 			}
 			callHistory = append(callHistory, record)
 
-			toolResult, err := a.skills.Execute(tc.Name, json.RawMessage(tc.Arguments))
-			if err != nil {
-				toolResult = fmt.Sprintf(`{"error":"%s"}`, err.Error())
+			toolResult := ""
+			if !a.isToolAllowed(providerName, tc.Name) {
+				toolResult = fmt.Sprintf(`{"error":"tool %s is not allowed for provider %s"}`, tc.Name, providerName)
+			} else {
+				result, err := a.skills.Execute(tc.Name, json.RawMessage(tc.Arguments))
+				if err != nil {
+					toolResult = fmt.Sprintf(`{"error":"%s"}`, err.Error())
+				} else {
+					toolResult = result
+				}
 			}
 			messages = append(messages, llm.Message{
 				Role:    "assistant",
@@ -332,17 +362,43 @@ func (a *Agent) buildPrompt(req *bridge.SignalRequest) promptContext {
 
 // buildToolDefs converts registered skills to LLM tool format.
 func (a *Agent) buildToolDefs() []llm.Tool {
+	return a.buildToolDefsForProvider(normalizeProviderName(a.llm.Name()))
+}
+
+func (a *Agent) buildToolDefsForProvider(provider string) []llm.Tool {
 	skillList := a.skills.List()
 	tools := make([]llm.Tool, 0, len(skillList))
 	for _, s := range skillList {
+		name, _ := s["name"].(string)
+		if !a.isToolAllowed(provider, name) {
+			continue
+		}
 		params, _ := s["parameters"].(map[string]any)
 		tools = append(tools, llm.Tool{
-			Name:        s["name"].(string),
+			Name:        name,
 			Description: s["description"].(string),
 			Parameters:  params,
 		})
 	}
 	return tools
+}
+
+func normalizeProviderName(name string) string {
+	out := strings.ToLower(strings.TrimSpace(name))
+	out = strings.TrimPrefix(out, "router:")
+	return out
+}
+
+func (a *Agent) isToolAllowed(provider, tool string) bool {
+	if len(a.toolPolicy) == 0 {
+		return true
+	}
+	allowed, ok := a.toolPolicy[normalizeProviderName(provider)]
+	if !ok || len(allowed) == 0 {
+		return true
+	}
+	_, exists := allowed[strings.ToLower(strings.TrimSpace(tool))]
+	return exists
 }
 
 // loadPairContext retrieves pair state from memory for context injection.

@@ -30,6 +30,9 @@ config.yaml.bak.*
 # Environment
 .env
 .env.*
+.secrets
+.secrets.*
+!.secrets.example
 
 # IDE / Editor
 .vscode/

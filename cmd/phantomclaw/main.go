@@ -12,7 +12,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -174,6 +177,11 @@ func main() {
 	defer restoreStdLog()
 	logger := zapLogger.Sugar()
 	logger.Infow("config loaded", "mode", cfg.Bot.Mode, "tz", cfg.Bot.Timezone, "pairs", cfg.Pairs)
+	for _, warning := range config.SecretWarnings(cfg) {
+		logger.Warnw("security: config secret detected", "warning", warning)
+	}
+	var stickyPrimary atomic.Bool
+	stickyPrimary.Store(cfg.LLM.StickyPrimary)
 
 	// --- Single-instance guard ---
 	lockPath := filepath.Join(filepath.Dir(cfg.Memory.DBPath), "phantomclaw.lock")
@@ -217,7 +225,7 @@ func main() {
 	// --- Error recovery ---
 	recovery := health.NewRecovery(func(component, action string) {
 		logger.Warnw("recovery: action triggered", "component", component, "action", action)
-		if action == "switch_provider" && cfg.LLM.StickyPrimary {
+		if action == "switch_provider" && stickyPrimary.Load() {
 			logger.Infow("recovery: switch_provider ignored (sticky primary enabled)", "component", component)
 			return
 		}
@@ -236,7 +244,12 @@ func main() {
 	logger.Infow("skills: registered", "count", len(skillReg.Names()), "names", skillReg.Names())
 
 	// --- LLM providers + router (config-driven) ---
+	providerModels := buildProviderModelMap(cfg.LLM.Providers)
+	providerAliases := cloneStringMap(cfg.LLM.Aliases)
+	toolPolicy := buildProviderToolPolicy(cfg.LLM.Providers)
+	var llmMetaMu sync.RWMutex
 	var providers []llm.Provider
+	providerEntries := map[string]config.LLMProviderEntry{}
 	providerByName := map[string]llm.Provider{}
 
 	for _, entry := range cfg.LLM.Providers {
@@ -244,34 +257,12 @@ func main() {
 			continue
 		}
 
-		var p llm.Provider
-		var err error
-
-		switch entry.Type {
-		case "claude":
-			p, err = llm.NewClaude(llm.ProviderConfig{APIKey: entry.APIKey, Model: entry.Model})
-		case "openai":
-			p, err = llm.NewOpenAI(llm.ProviderConfig{APIKey: entry.APIKey, Model: entry.Model})
-		case "openai_compat":
-			if entry.BaseURL == "" {
-				logger.Warnw("llm: skipping provider (no base_url)", "name", entry.Name)
-				continue
-			}
-			p, err = llm.NewGeneric(llm.GenericConfig{
-				Name:    entry.Name,
-				BaseURL: entry.BaseURL,
-				APIKey:  entry.APIKey,
-				Model:   entry.Model,
-			})
-		default:
-			logger.Warnw("llm: unknown provider type, skipping", "name", entry.Name, "type", entry.Type)
-			continue
-		}
-
+		p, err := buildProviderFromEntry(entry, "")
 		if err != nil {
 			logger.Warnw("llm: failed to init provider", "name", entry.Name, "error", err)
 			continue
 		}
+		providerEntries[strings.ToLower(strings.TrimSpace(entry.Name))] = entry
 		providers = append(providers, p)
 		providerByName[p.Name()] = p
 		providerByName[strings.ToLower(p.Name())] = p
@@ -412,6 +403,7 @@ func main() {
 			Strategy:    strategyMgr,
 			Echo:        echoRecall,
 			Diary:       diaryWriter,
+			ToolPolicy:  toolPolicy,
 		})
 		logger.Info("agent: brain initialized with full integrations + conversation memory")
 	}
@@ -467,6 +459,36 @@ func main() {
 	)
 	bridgeServer.SetSignalTimeout(cfg.Bridge.SignalTimeoutDuration())
 	logger.Infow("bridge: signal timeout configured", "timeout_ms", cfg.Bridge.SignalTimeoutDuration().Milliseconds())
+	bridgeServer.SetModelsProvider(func() any {
+		current := ""
+		status := map[string]string{}
+		if llmRouter != nil {
+			current = strings.TrimPrefix(llmRouter.Name(), "router:")
+			status = llmRouter.ProviderStatus()
+		}
+
+		llmMetaMu.RLock()
+		models := make([]map[string]any, 0, len(providers))
+		for _, p := range providers {
+			name := p.Name()
+			models = append(models, map[string]any{
+				"provider": name,
+				"model":    providerModels[strings.ToLower(name)],
+				"status":   status[name],
+				"current":  strings.EqualFold(name, current),
+			})
+		}
+		aliases := cloneStringMap(providerAliases)
+		sticky := stickyPrimary.Load()
+		llmMetaMu.RUnlock()
+
+		return map[string]any{
+			"current_provider": current,
+			"sticky_primary":   sticky,
+			"providers":        models,
+			"aliases":          aliases,
+		}
+	})
 
 	// --- Telegram bot ---
 	var tgBot *telegram.Bot
@@ -486,12 +508,24 @@ func main() {
 				if requested == "" {
 					return "", fmt.Errorf("provider name or alias is required")
 				}
-				resolved := llmRouter.Resolve(requested)
+
+				nameTarget := requested
+				overrideModel := ""
+				if parts := strings.SplitN(requested, ":", 2); len(parts) == 2 {
+					nameTarget = strings.TrimSpace(parts[0])
+					overrideModel = strings.TrimSpace(parts[1])
+				}
+
+				resolved := llmRouter.Resolve(nameTarget)
+
+				llmMetaMu.RLock()
 				provider, ok := providerByName[resolved]
 				if !ok {
 					provider, ok = providerByName[strings.ToLower(resolved)]
 				}
+				llmMetaMu.RUnlock()
 				if !ok {
+					llmMetaMu.RLock()
 					known := make([]string, 0, len(providerByName))
 					seen := map[string]struct{}{}
 					for _, p := range providers {
@@ -501,8 +535,34 @@ func main() {
 						seen[p.Name()] = struct{}{}
 						known = append(known, p.Name())
 					}
+					llmMetaMu.RUnlock()
 					return "", fmt.Errorf("unknown provider/alias '%s' (resolved: '%s'). available: %s", requested, resolved, strings.Join(known, ", "))
 				}
+
+				if overrideModel != "" {
+					entry, ok := providerEntries[strings.ToLower(resolved)]
+					if !ok {
+						return "", fmt.Errorf("provider metadata unavailable for %q", resolved)
+					}
+					overridden, err := buildProviderFromEntry(entry, overrideModel)
+					if err != nil {
+						return "", fmt.Errorf("model override failed: %w", err)
+					}
+					provider = overridden
+
+					llmMetaMu.Lock()
+					providerByName[provider.Name()] = provider
+					providerByName[strings.ToLower(provider.Name())] = provider
+					for i, existing := range providers {
+						if strings.EqualFold(existing.Name(), provider.Name()) {
+							providers[i] = provider
+							break
+						}
+					}
+					providerModels[strings.ToLower(provider.Name())] = overrideModel
+					llmMetaMu.Unlock()
+				}
+
 				llmRouter.SetPrimary(provider)
 				return strings.TrimPrefix(llmRouter.Name(), "router:"), nil
 			}
@@ -521,7 +581,7 @@ func main() {
 			LLMCurrent:  llmCurrent,
 			LLMSwitch:   llmSwitch,
 			LLMStatus:   llmStatus,
-			LLMSticky:   cfg.LLM.StickyPrimary,
+			LLMSticky:   stickyPrimary.Load(),
 		})
 		if err != nil {
 			logger.Fatalf("telegram: %v", err)
@@ -581,6 +641,80 @@ func main() {
 		logger.Info("alerts: session alerts started")
 	}
 
+	// --- Config hot reload ---
+	if err := config.Watch(*configPath, func(next *config.Config) error {
+		riskEngine.UpdateConfig(next.Risk)
+		bridgeServer.SetSignalTimeout(next.Bridge.SignalTimeoutDuration())
+		bridgeServer.SetAuthToken(next.Bridge.AuthToken)
+
+		nextProviders := make([]llm.Provider, 0, len(next.LLM.Providers))
+		nextProviderByName := make(map[string]llm.Provider)
+		nextEntries := make(map[string]config.LLMProviderEntry, len(next.LLM.Providers))
+		for _, entry := range next.LLM.Providers {
+			if shouldSkipProvider(entry, logger) {
+				continue
+			}
+			p, err := buildProviderFromEntry(entry, "")
+			if err != nil {
+				logger.Warnw("config reload: provider rebuild failed", "provider", entry.Name, "error", err)
+				continue
+			}
+			nextProviders = append(nextProviders, p)
+			nextProviderByName[p.Name()] = p
+			nextProviderByName[strings.ToLower(p.Name())] = p
+			nextEntries[strings.ToLower(strings.TrimSpace(entry.Name))] = entry
+		}
+		if len(nextProviders) == 0 {
+			return fmt.Errorf("config reload rejected: no active LLM providers")
+		}
+		primaryName := next.LLM.Primary
+		if resolved, ok := next.LLM.Aliases[primaryName]; ok {
+			primaryName = resolved
+		}
+		orderedProviders := reorderProviders(nextProviders, primaryName)
+
+		stickyPrimary.Store(next.LLM.StickyPrimary)
+		if llmRouter != nil {
+			llmRouter.SetProviders(orderedProviders)
+			llmRouter.SetStickyPrimary(next.LLM.StickyPrimary)
+			llmRouter.SetAliases(next.LLM.Aliases)
+		}
+
+		llmMetaMu.Lock()
+		providers = nextProviders
+		providerByName = nextProviderByName
+		providerEntries = nextEntries
+		providerModels = buildProviderModelMap(next.LLM.Providers)
+		providerAliases = cloneStringMap(next.LLM.Aliases)
+		toolPolicy = buildProviderToolPolicy(next.LLM.Providers)
+		llmMetaMu.Unlock()
+
+		if mode, err := safety.ParseMode(next.Bot.Mode); err == nil {
+			safetyMgr.SetMode(mode)
+			if mode == safety.ModeHalt {
+				riskEngine.SetHalted(true)
+			} else {
+				riskEngine.SetHalted(false)
+			}
+		}
+
+		for _, warning := range config.SecretWarnings(next) {
+			logger.Warnw("security: config secret detected", "warning", warning)
+		}
+		logger.Infow("config: hot reload applied",
+			"mode", next.Bot.Mode,
+			"signal_timeout_ms", next.Bridge.SignalTimeoutMs,
+			"sticky_primary", next.LLM.StickyPrimary,
+		)
+		return nil
+	}, func(err error) {
+		logger.Errorw("config: hot reload rejected", "error", err)
+	}); err != nil {
+		logger.Warnw("config: hot reload disabled", "error", err)
+	} else {
+		logger.Infow("config: hot reload enabled", "file", *configPath)
+	}
+
 	// --- Start services ---
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -629,6 +763,90 @@ func reorderProviders(providers []llm.Provider, primaryName string) []llm.Provid
 		return append([]llm.Provider{primary}, rest...)
 	}
 	return providers // primary not found, keep original order
+}
+
+func buildProviderModelMap(entries []config.LLMProviderEntry) map[string]string {
+	out := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		name := strings.ToLower(strings.TrimSpace(entry.Name))
+		if name == "" {
+			continue
+		}
+		out[name] = strings.TrimSpace(entry.Model)
+	}
+	return out
+}
+
+func buildProviderToolPolicy(entries []config.LLMProviderEntry) map[string][]string {
+	out := make(map[string][]string)
+	for _, entry := range entries {
+		name := strings.ToLower(strings.TrimSpace(entry.Name))
+		if name == "" || len(entry.AllowedTools) == 0 {
+			continue
+		}
+		allow := make([]string, 0, len(entry.AllowedTools))
+		for _, tool := range entry.AllowedTools {
+			t := strings.ToLower(strings.TrimSpace(tool))
+			if t == "" {
+				continue
+			}
+			if slices.Contains(allow, t) {
+				continue
+			}
+			allow = append(allow, t)
+		}
+		if len(allow) > 0 {
+			out[name] = allow
+		}
+	}
+	return out
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if input == nil {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(input))
+	for k, v := range input {
+		out[k] = v
+	}
+	return out
+}
+
+func buildProviderFromEntry(entry config.LLMProviderEntry, overrideModel string) (llm.Provider, error) {
+	model := strings.TrimSpace(entry.Model)
+	if strings.TrimSpace(overrideModel) != "" {
+		model = strings.TrimSpace(overrideModel)
+	}
+	if model == "" {
+		return nil, fmt.Errorf("llm provider %q requires a model", entry.Name)
+	}
+
+	switch strings.TrimSpace(entry.Type) {
+	case "claude":
+		return llm.NewClaude(llm.ProviderConfig{
+			APIKey: entry.APIKey,
+			Model:  model,
+		})
+	case "openai":
+		return llm.NewOpenAI(llm.ProviderConfig{
+			APIKey: entry.APIKey,
+			Model:  model,
+		})
+	case "openai_compat":
+		baseURL := strings.TrimSpace(entry.BaseURL)
+		if baseURL == "" {
+			return nil, fmt.Errorf("llm provider %q missing base_url", entry.Name)
+		}
+		return llm.NewGeneric(llm.GenericConfig{
+			Name:    entry.Name,
+			BaseURL: baseURL,
+			APIKey:  entry.APIKey,
+			Model:   model,
+		})
+	default:
+		return nil, fmt.Errorf("unknown provider type %q", entry.Type)
+	}
 }
 
 func shouldSkipProvider(entry config.LLMProviderEntry, logger *zap.SugaredLogger) bool {

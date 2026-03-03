@@ -201,3 +201,10 @@ func (e *Engine) Stats() Stats {
 		Halted:           e.halted,
 	}
 }
+
+// UpdateConfig applies runtime risk-config updates for hot reload.
+func (e *Engine) UpdateConfig(cfg config.RiskConfig) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cfg = cfg
+}

@@ -420,6 +420,43 @@ func TestBridgeAuthRejectsUnauthorizedRequests(t *testing.T) {
 	}
 }
 
+func TestBridgeModelsEndpoint(t *testing.T) {
+	s := NewServer("127.0.0.1", 0, nil, nil, nil, "bridge-secret")
+	s.SetModelsProvider(func() any {
+		return map[string]any{
+			"current_provider": "claude",
+			"providers": []map[string]any{
+				{"provider": "claude", "model": "claude-sonnet-4-20250514", "status": "healthy", "current": true},
+				{"provider": "groq", "model": "llama-3.3-70b-versatile", "status": "healthy", "current": false},
+			},
+			"aliases": map[string]string{"fast": "groq"},
+		}
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/models", nil)
+	req.Header.Set(bridgeAuthHeader, "bridge-secret")
+	s.handleModels(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("models status=%d, want=%d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode /models: %v", err)
+	}
+	if payload["status"] != "ok" {
+		t.Fatalf("unexpected status payload: %+v", payload)
+	}
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected data object, got: %#v", payload["data"])
+	}
+	if data["current_provider"] != "claude" {
+		t.Fatalf("current_provider=%v, want=claude", data["current_provider"])
+	}
+}
+
 func TestBridgeAuthAllowsAuthorizedRequests(t *testing.T) {
 	s := NewServer("127.0.0.1", 0, func(ctx context.Context, req *SignalRequest) *SignalResponse {
 		return &SignalResponse{

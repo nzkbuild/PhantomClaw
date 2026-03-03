@@ -67,7 +67,7 @@ cd PhantomClaw
 
 ### Step 2: Set your API keys
 
-Set these environment variables in PowerShell. Replace the values with your actual keys:
+Set these environment variables in PowerShell (or place them in a local `.secrets` file). Replace the values with your actual keys:
 
 ```powershell
 # Required — at least one AI provider (set in config.yaml providers list)
@@ -75,7 +75,10 @@ $env:PHANTOM_LLM_PROVIDERS_0_API_KEY = "sk-ant-your-key-here"
 
 # Optional — add more providers for fallback
 $env:PHANTOM_LLM_PROVIDERS_1_API_KEY = "sk-your-openai-key"
-$env:PHANTOM_LLM_PROVIDERS_2_API_KEY = "sk-your-groq-key"
+$env:PHANTOM_LLM_PROVIDERS_2_API_KEY = "sk-your-openrouter-key"
+$env:PHANTOM_LLM_PROVIDERS_3_API_KEY = "sk-your-groq-key"
+$env:PHANTOM_LLM_PROVIDERS_4_API_KEY = "sk-your-mistral-key"
+$env:PHANTOM_LLM_PROVIDERS_5_API_KEY = "sk-your-deepseek-key"
 
 # Required — Telegram
 $env:PHANTOM_TELEGRAM_TOKEN = "123456:ABC-your-bot-token"
@@ -97,6 +100,12 @@ $env:PHANTOM_MARKET_FAIL_POLICY = "fail_open"  # or fail_closed
 
 ```powershell
 Copy-Item .\config.example.yaml .\config.yaml
+```
+
+Optional secrets file bootstrap:
+
+```powershell
+Copy-Item .\.secrets.example .\.secrets
 ```
 
 The default settings are safe to start with. But if you want to adjust risk limits:
@@ -214,6 +223,7 @@ Only the configured `telegram.chat_id` is authorized to control the bot.
 - bridge contract versioning: EA sends `X-Phantom-Bridge-Contract`; major-version mismatch is rejected with HTTP 400.
 - Telegram ACL: only configured `telegram.chat_id` is authorized for inbound command handling.
 - Telegram chat mode: `/chat on` routes non-command text to the agent brain, `/chat off` restores command-only behavior.
+- Runtime model controls: `/model status|list|set <provider_or_alias[:model]>` and bridge `GET /models`.
 - Trade-result contract: `/trade-result` requires `entry > 0` and rejects invalid payloads.
 - admin introspection endpoints: `/admin/jobs` (pending cron jobs) and `/admin/queue` (active pending decisions).
 
