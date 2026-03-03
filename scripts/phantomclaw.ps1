@@ -279,9 +279,23 @@ function Invoke-Handshake {
 
     Write-Host "Bridge /health"
     Invoke-NativeChecked -FilePath "curl.exe" -ArgumentList @("-s", "-i", "http://127.0.0.1:8765/health")
+
+    $contract = "v3"
+    try {
+        $healthJson = & curl.exe -s "http://127.0.0.1:8765/health"
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($healthJson)) {
+            $healthObj = $healthJson | ConvertFrom-Json
+            if ($null -ne $healthObj.contract -and -not [string]::IsNullOrWhiteSpace([string]$healthObj.contract)) {
+                $contract = [string]$healthObj.contract
+            }
+        }
+    } catch {
+        # Keep default contract fallback.
+    }
+
     Write-Host ""
     Write-Host "Bridge /account"
-    Invoke-NativeChecked -FilePath "curl.exe" -ArgumentList @("-s", "-i", "-H", "X-Phantom-Bridge-Token: $bridgeToken", "-H", "X-Phantom-Bridge-Contract: v3", "http://127.0.0.1:8765/account")
+    Invoke-NativeChecked -FilePath "curl.exe" -ArgumentList @("-s", "-i", "-H", "X-Phantom-Bridge-Token: $bridgeToken", "-H", "X-Phantom-Bridge-Contract: $contract", "http://127.0.0.1:8765/account")
 }
 
 switch ($Action) {
