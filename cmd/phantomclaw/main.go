@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -684,80 +685,100 @@ func main() {
 
 	dashboardHost := cfg.Bridge.Host
 	dashboardPort := 8080
-	dashboardServer := dashboard.New(dashboardHost, dashboardPort, dashboard.Dependencies{
-		Snapshot: func(ctx context.Context) (map[string]any, error) {
-			stats := riskEngine.Stats()
-			return map[string]any{
-				"mode":           safetyMgr.CurrentMode(),
-				"session":        sched.CurrentSession(),
-				"daily_loss":     stats.DailyLoss,
-				"open_positions": stats.OpenPositions,
-				"max_positions":  stats.MaxPositions,
-				"halted":         stats.Halted,
-				"time":           time.Now().UTC().Format(time.RFC3339),
-			}, nil
-		},
-		Decisions: func(ctx context.Context, limit int, symbol string) (map[string]any, error) {
-			rows, err := db.ListDecisionHistory(limit, symbol)
-			if err != nil {
-				return nil, err
-			}
-			return map[string]any{
-				"count":     len(rows),
-				"symbol":    symbol,
-				"decisions": rows,
-			}, nil
-		},
-		Sessions: func(ctx context.Context, limit int, pair string) (map[string]any, error) {
-			if sessionStore == nil {
-				return map[string]any{
-					"count": 0,
-					"pair":  pair,
-					"turns": []memory.Turn{},
-				}, nil
-			}
+	selectedDashboardPort, dashboardPortErr := firstAvailableTCPPort(dashboardHost, dashboardPort, 10)
+	if dashboardPortErr != nil {
+		logger.Warnw("dashboard: disabled (no available port)",
+			"host", dashboardHost,
+			"preferred_port", dashboardPort,
+			"error", dashboardPortErr,
+		)
+	}
+	if selectedDashboardPort != 0 && selectedDashboardPort != dashboardPort {
+		logger.Warnw("dashboard: preferred port unavailable, using fallback",
+			"host", dashboardHost,
+			"preferred_port", dashboardPort,
+			"fallback_port", selectedDashboardPort,
+		)
+	}
+	dashboardPort = selectedDashboardPort
 
-			var (
-				turns []memory.Turn
-				err   error
-			)
-			if strings.TrimSpace(pair) != "" {
-				turns, err = sessionStore.LoadForPair(pair, limit)
-			} else {
-				turns, err = sessionStore.LoadToday(limit)
-			}
-			if err != nil {
-				return nil, err
-			}
-			if turns == nil {
-				turns = []memory.Turn{}
-			}
-			return map[string]any{
-				"count": len(turns),
-				"pair":  pair,
-				"turns": turns,
-			}, nil
-		},
-		Diagnostics: func(ctx context.Context) (map[string]any, error) {
-			return diagnosticsSnapshot(), nil
-		},
-		Logs: func(ctx context.Context, query bridge.LogQuery) (map[string]any, error) {
-			rows, err := logging.QueryJSONLogFile(logFilePath, logging.Query{
-				Level:     query.Level,
-				Component: query.Component,
-				Contains:  query.Contains,
-				Since:     query.Since,
-				Limit:     query.Limit,
-			})
-			if err != nil {
-				return nil, err
-			}
-			return map[string]any{
-				"count": len(rows),
-				"logs":  rows,
-			}, nil
-		},
-	})
+	var dashboardServer *dashboard.Server
+	if dashboardPort != 0 {
+		dashboardServer = dashboard.New(dashboardHost, dashboardPort, dashboard.Dependencies{
+			Snapshot: func(ctx context.Context) (map[string]any, error) {
+				stats := riskEngine.Stats()
+				return map[string]any{
+					"mode":           safetyMgr.CurrentMode(),
+					"session":        sched.CurrentSession(),
+					"daily_loss":     stats.DailyLoss,
+					"open_positions": stats.OpenPositions,
+					"max_positions":  stats.MaxPositions,
+					"halted":         stats.Halted,
+					"time":           time.Now().UTC().Format(time.RFC3339),
+				}, nil
+			},
+			Decisions: func(ctx context.Context, limit int, symbol string) (map[string]any, error) {
+				rows, err := db.ListDecisionHistory(limit, symbol)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{
+					"count":     len(rows),
+					"symbol":    symbol,
+					"decisions": rows,
+				}, nil
+			},
+			Sessions: func(ctx context.Context, limit int, pair string) (map[string]any, error) {
+				if sessionStore == nil {
+					return map[string]any{
+						"count": 0,
+						"pair":  pair,
+						"turns": []memory.Turn{},
+					}, nil
+				}
+
+				var (
+					turns []memory.Turn
+					err   error
+				)
+				if strings.TrimSpace(pair) != "" {
+					turns, err = sessionStore.LoadForPair(pair, limit)
+				} else {
+					turns, err = sessionStore.LoadToday(limit)
+				}
+				if err != nil {
+					return nil, err
+				}
+				if turns == nil {
+					turns = []memory.Turn{}
+				}
+				return map[string]any{
+					"count": len(turns),
+					"pair":  pair,
+					"turns": turns,
+				}, nil
+			},
+			Diagnostics: func(ctx context.Context) (map[string]any, error) {
+				return diagnosticsSnapshot(), nil
+			},
+			Logs: func(ctx context.Context, query bridge.LogQuery) (map[string]any, error) {
+				rows, err := logging.QueryJSONLogFile(logFilePath, logging.Query{
+					Level:     query.Level,
+					Component: query.Component,
+					Contains:  query.Contains,
+					Since:     query.Since,
+					Limit:     query.Limit,
+				})
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{
+					"count": len(rows),
+					"logs":  rows,
+				}, nil
+			},
+		})
+	}
 
 	// --- Session alerts ---
 	var sessionAlerts *alerts.SessionAlerts
@@ -854,23 +875,33 @@ func main() {
 			logger.Fatalf("bridge: %v", err)
 		}
 	}()
-	go func() {
-		if err := dashboardServer.Start(); err != nil && err != http.ErrServerClosed {
-			logger.Fatalf("dashboard: %v", err)
-		}
-	}()
+	if dashboardServer != nil {
+		go func() {
+			if err := dashboardServer.Start(); err != nil && err != http.ErrServerClosed {
+				logger.Errorw("dashboard: failed to start; continuing without dashboard",
+					"error", err,
+					"host", dashboardHost,
+					"port", dashboardPort,
+				)
+			}
+		}()
+	}
 
 	if tgBot != nil {
 		go tgBot.Start(ctx)
 	}
 
+	dashboardAddr := "disabled"
+	if dashboardServer != nil {
+		dashboardAddr = fmt.Sprintf("%s:%d", dashboardHost, dashboardPort)
+	}
 	logger.Infow("🐾 PhantomClaw is running",
 		"version", version,
 		"mode", cfg.Bot.Mode,
 		"pairs", cfg.Pairs,
 		"llm_providers", len(providers),
 		"bridge", fmt.Sprintf("%s:%d", cfg.Bridge.Host, cfg.Bridge.Port),
-		"dashboard", fmt.Sprintf("%s:%d", dashboardHost, dashboardPort),
+		"dashboard", dashboardAddr,
 	)
 
 	// --- Graceful shutdown ---
@@ -883,12 +914,40 @@ func main() {
 	if err := bridgeServer.Stop(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Warnw("shutdown: bridge stop error", "error", err)
 	}
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer shutdownCancel()
-	if err := dashboardServer.Stop(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Warnw("shutdown: dashboard stop error", "error", err)
+	if dashboardServer != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer shutdownCancel()
+		if err := dashboardServer.Stop(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Warnw("shutdown: dashboard stop error", "error", err)
+		}
 	}
 	logger.Info("shutdown: complete")
+}
+
+func firstAvailableTCPPort(host string, preferred int, attempts int) (int, error) {
+	if preferred <= 0 {
+		return 0, fmt.Errorf("preferred port must be > 0")
+	}
+	if attempts <= 0 {
+		attempts = 1
+	}
+
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		port := preferred + i
+		addr := fmt.Sprintf("%s:%d", host, port)
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		_ = ln.Close()
+		return port, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no available ports")
+	}
+	return 0, lastErr
 }
 
 // reorderProviders puts the provider with the given name first, keeping the rest in order.

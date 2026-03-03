@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -90,5 +92,34 @@ func TestMakeBridgeProbeWithoutAccountSnapshot(t *testing.T) {
 	}
 	if result.EAConnected {
 		t.Fatalf("expected EAConnected=false when account is not found, got %+v", result)
+	}
+}
+
+func TestFirstAvailableTCPPortFallsBack(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen occupied: %v", err)
+	}
+	defer occupied.Close()
+
+	occupiedPort := occupied.Addr().(*net.TCPAddr).Port
+	got, err := firstAvailableTCPPort("127.0.0.1", occupiedPort, 2)
+	if err != nil {
+		t.Fatalf("firstAvailableTCPPort: %v", err)
+	}
+	if got == occupiedPort {
+		t.Fatalf("expected fallback port, got occupied port %d", got)
+	}
+
+	probe, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", got))
+	if err != nil {
+		t.Fatalf("fallback port not bindable: %v", err)
+	}
+	_ = probe.Close()
+}
+
+func TestFirstAvailableTCPPortInvalidPreferred(t *testing.T) {
+	if _, err := firstAvailableTCPPort("127.0.0.1", 0, 1); err == nil {
+		t.Fatal("expected error for invalid preferred port")
 	}
 }
