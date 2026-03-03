@@ -127,6 +127,7 @@ If you see `CGO_ENABLED` errors, make sure TDM-GCC is installed and in your PATH
 3. Drag `PhantomClaw` onto your XAUUSD H1 chart
 4. **Important:** Go to Tools → Options → Expert Advisors → ✅ Allow WebRequest for listed URLs → Add `http://127.0.0.1:8765`
 5. If bridge auth is enabled, set the EA input `BridgeAuthToken` to the same value as `PHANTOM_BRIDGE_AUTH_TOKEN`
+6. Keep EA `BridgeContractVersion` aligned with bridge contract major version (default `v3`)
 
 ### Step 6: Run it!
 
@@ -166,6 +167,7 @@ Only the configured `telegram.chat_id` is authorized to control the bot.
 | `/pairs` | Shows active pairs and their win rates |
 | `/confidence` | Shows the current confidence score |
 | `/rollback` | Shows strategy versions (undo strategy changes) |
+| `/chat on|off|status` | Toggle optional intelligent chat replies via agent brain |
 | `/config` | Shows your risk settings |
 | `/help` | Shows all commands |
 
@@ -209,8 +211,11 @@ Only the configured `telegram.chat_id` is authorized to control the bot.
 - `request_id`: each `/signal` request is correlated to `/decision` polling for deterministic matching.
 - decision lifecycle: `pending -> delivered -> consumed|expired` (with `consume=1` or `POST /decision/consume`).
 - bridge auth: if `bridge.auth_token` is set, EA must send header `X-Phantom-Bridge-Token` with matching value.
+- bridge contract versioning: EA sends `X-Phantom-Bridge-Contract`; major-version mismatch is rejected with HTTP 400.
 - Telegram ACL: only configured `telegram.chat_id` is authorized for inbound command handling.
+- Telegram chat mode: `/chat on` routes non-command text to the agent brain, `/chat off` restores command-only behavior.
 - Trade-result contract: `/trade-result` requires `entry > 0` and rejects invalid payloads.
+- admin introspection endpoints: `/admin/jobs` (pending cron jobs) and `/admin/queue` (active pending decisions).
 
 ### 🔧 Agent Tools
 

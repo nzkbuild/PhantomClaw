@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -24,13 +27,21 @@ type Dependencies struct {
 	Memory    *memory.DB
 	Diary     *memory.DiaryWriter
 	Strategy  *memory.StrategyManager
+	Chat      ChatResponder
+}
+
+// ChatResponder handles free-form chat messages when chat mode is enabled.
+type ChatResponder interface {
+	HandleChat(ctx context.Context, userText string) (string, error)
 }
 
 // Bot wraps the Telegram bot and handles command dispatch.
 type Bot struct {
-	b      *bot.Bot
-	chatID int64
-	deps   Dependencies
+	mu       sync.RWMutex
+	b        *bot.Bot
+	chatID   int64
+	deps     Dependencies
+	chatMode bool
 }
 
 func logInbound(command string, update *models.Update) {
@@ -68,6 +79,7 @@ func New(token string, chatID int64, deps Dependencies) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/confidence", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleConfidence))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/config", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleConfig))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/rollback", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleRollback))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/chat", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleChatMode))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleHelp))
 
 	tb.b = b
@@ -91,24 +103,38 @@ func (tb *Bot) Send(ctx context.Context, text string) {
 // sendReply sends a Telegram message and logs failures.
 // If markdown send fails, it retries once as plain text.
 func (tb *Bot) sendReply(ctx context.Context, b *bot.Bot, chatID int64, text string, markdown bool) {
-	params := &bot.SendMessageParams{
+	base := &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   text,
 	}
+
+	// Strategy 1: original content with legacy Markdown mode.
 	if markdown {
+		params := *base
 		params.ParseMode = models.ParseModeMarkdown
+		if _, err := b.SendMessage(ctx, &params); err == nil {
+			return
+		} else {
+			log.Printf("telegram: send markdown failed chat_id=%d err=%v", chatID, err)
+		}
+
+		// Strategy 2: escaped MarkdownV2 for stricter parser compatibility.
+		params = *base
+		params.ParseMode = "MarkdownV2"
+		params.Text = escapeMarkdownV2(text)
+		if _, err := b.SendMessage(ctx, &params); err == nil {
+			return
+		} else {
+			log.Printf("telegram: send markdownv2 failed chat_id=%d err=%v", chatID, err)
+		}
 	}
 
-	if _, err := b.SendMessage(ctx, params); err != nil {
-		log.Printf("telegram: send failed chat_id=%d markdown=%v err=%v text=%q", chatID, markdown, err, text)
-		if markdown {
-			// Retry once in plain text in case Markdown formatting caused API rejection.
-			params.ParseMode = ""
-			params.Text = markdownToPlain(text)
-			if _, err2 := b.SendMessage(ctx, params); err2 != nil {
-				log.Printf("telegram: send retry failed chat_id=%d err=%v", chatID, err2)
-			}
-		}
+	// Strategy 3: plain text fallback.
+	params := *base
+	params.ParseMode = ""
+	params.Text = markdownToPlain(text)
+	if _, err := b.SendMessage(ctx, &params); err != nil {
+		log.Printf("telegram: send plain fallback failed chat_id=%d err=%v", chatID, err)
 	}
 }
 
@@ -118,8 +144,30 @@ func markdownToPlain(s string) string {
 		"`", "",
 		"*", "",
 		"_", "",
+		"[", "",
+		"]", "",
+		"(", "",
+		")", "",
 	)
 	return r.Replace(s)
+}
+
+func escapeMarkdownV2(s string) string {
+	// Telegram MarkdownV2 reserved characters.
+	re := regexp.MustCompile(`([_*\[\]()~` + "`" + `>#+\-=|{}.!\\])`)
+	return re.ReplaceAllString(s, `\$1`)
+}
+
+func (tb *Bot) setChatMode(enabled bool) {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	tb.chatMode = enabled
+}
+
+func (tb *Bot) isChatModeEnabled() bool {
+	tb.mu.RLock()
+	defer tb.mu.RUnlock()
+	return tb.chatMode
 }
 
 func (tb *Bot) wrapAuthorized(next func(context.Context, *bot.Bot, *models.Update)) func(context.Context, *bot.Bot, *models.Update) {
@@ -375,10 +423,45 @@ func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update
 		"`/pending` — Pending orders (check MT5)\n" +
 		"`/confidence` — Current confidence score\n" +
 		"`/rollback [N]` — Strategy versions / rollback\n" +
+		"`/chat on|off|status` — Toggle intelligent chat replies\n" +
 		"`/config` — Risk config\n" +
 		"`/help` — This message"
 
 	tb.sendReply(ctx, b, update.Message.Chat.ID, msg, true)
+}
+
+func (tb *Bot) handleChatMode(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/chat", update)
+	parts := strings.Fields(update.Message.Text)
+	if len(parts) < 2 {
+		status := "off"
+		if tb.isChatModeEnabled() {
+			status = "on"
+		}
+		tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("💬 Chat mode is *%s*.\nUsage: `/chat on|off|status`", status), true)
+		return
+	}
+
+	switch strings.ToLower(strings.TrimSpace(parts[1])) {
+	case "on":
+		if tb.deps.Chat == nil {
+			tb.sendReply(ctx, b, update.Message.Chat.ID, "❌ Chat mode unavailable: agent brain is not configured.", false)
+			return
+		}
+		tb.setChatMode(true)
+		tb.sendReply(ctx, b, update.Message.Chat.ID, "✅ Chat mode enabled. Non-command messages will be answered by PhantomClaw brain.", false)
+	case "off":
+		tb.setChatMode(false)
+		tb.sendReply(ctx, b, update.Message.Chat.ID, "✅ Chat mode disabled.", false)
+	case "status":
+		status := "off"
+		if tb.isChatModeEnabled() {
+			status = "on"
+		}
+		tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("💬 Chat mode is %s.", status), false)
+	default:
+		tb.sendReply(ctx, b, update.Message.Chat.ID, "Usage: `/chat on|off|status`", true)
+	}
 }
 
 func (tb *Bot) handleUnknown(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -388,6 +471,23 @@ func (tb *Bot) handleUnknown(ctx context.Context, b *bot.Bot, update *models.Upd
 	}
 	logInbound("unknown", update)
 	if update.Message == nil {
+		return
+	}
+
+	if tb.isChatModeEnabled() && tb.deps.Chat != nil && !strings.HasPrefix(strings.TrimSpace(update.Message.Text), "/") {
+		chatCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+
+		reply, err := tb.deps.Chat.HandleChat(chatCtx, update.Message.Text)
+		if err != nil {
+			tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("❌ Chat error: %v", err), false)
+			return
+		}
+		if strings.TrimSpace(reply) == "" {
+			tb.sendReply(ctx, b, update.Message.Chat.ID, "I don't have a useful response right now.", false)
+			return
+		}
+		tb.sendReply(ctx, b, update.Message.Chat.ID, reply, false)
 		return
 	}
 

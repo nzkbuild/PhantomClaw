@@ -513,6 +513,24 @@ func (a *Agent) HandleTradeResult(ctx context.Context, req *bridge.TradeResultRe
 	go a.runPostMortem(ctx, tradeID, req)
 }
 
+// HandleChat generates a conversational reply for Telegram chat mode.
+func (a *Agent) HandleChat(ctx context.Context, userText string) (string, error) {
+	var sb strings.Builder
+	sb.WriteString("You are PhantomClaw, a trading assistant bot. ")
+	sb.WriteString("Answer clearly and concisely. Do not claim trades were executed unless explicitly provided.\n")
+	sb.WriteString(fmt.Sprintf("Current session: %s\n", a.scheduler.CurrentSession()))
+	sb.WriteString(fmt.Sprintf("Safety mode: %s\n", a.safety.CurrentMode()))
+
+	stats := a.risk.Stats()
+	sb.WriteString(fmt.Sprintf("Open positions: %d/%d\n", stats.OpenPositions, stats.MaxPositions))
+	sb.WriteString(fmt.Sprintf("Daily loss: %.2f\n", stats.DailyLoss))
+
+	return a.llm.Chat(ctx, []llm.Message{
+		{Role: "system", Content: sb.String()},
+		{Role: "user", Content: userText},
+	})
+}
+
 // runPostMortem asks the LLM to analyze a closed trade and write a lesson.
 func (a *Agent) runPostMortem(ctx context.Context, tradeID int64, req *bridge.TradeResultRequest) {
 	prompt := fmt.Sprintf(

@@ -1,9 +1,12 @@
 package memory
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestPendingDecisionLifecycle(t *testing.T) {
@@ -126,5 +129,58 @@ func TestCronJobLifecycle(t *testing.T) {
 	}
 	if status != "fired" {
 		t.Fatalf("status=%q, want=fired", status)
+	}
+}
+
+func TestNewDBFailsOnSchemaVersionMismatch(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "memory.db")
+	db, err := NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB initial: %v", err)
+	}
+	_ = db.Close()
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := raw.Exec(`UPDATE metadata SET value = '999', updated_at = datetime('now') WHERE key = 'schema_version'`); err != nil {
+		raw.Close()
+		t.Fatalf("update schema_version: %v", err)
+	}
+	_ = raw.Close()
+
+	if _, err := NewDB(dbPath); err == nil {
+		t.Fatal("expected schema version mismatch error")
+	}
+}
+
+func TestListActivePendingDecisions(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "memory.db")
+	db, err := NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.UpsertPendingDecision("req-a", "EURUSD", `{"action":"HOLD"}`, time.Now().Add(5*time.Minute)); err != nil {
+		t.Fatalf("UpsertPendingDecision req-a: %v", err)
+	}
+	if err := db.UpsertPendingDecision("req-b", "XAUUSD", `{"action":"HOLD"}`, time.Now().Add(5*time.Minute)); err != nil {
+		t.Fatalf("UpsertPendingDecision req-b: %v", err)
+	}
+	if err := db.ConsumePendingDecision("req-b"); err != nil {
+		t.Fatalf("ConsumePendingDecision req-b: %v", err)
+	}
+
+	rows, err := db.ListActivePendingDecisions(10)
+	if err != nil {
+		t.Fatalf("ListActivePendingDecisions: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("len(rows)=%d, want=1", len(rows))
+	}
+	if rows[0].RequestID != "req-a" {
+		t.Fatalf("request_id=%q, want=req-a", rows[0].RequestID)
 	}
 }

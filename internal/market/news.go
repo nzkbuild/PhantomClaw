@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nzkbuild/PhantomClaw/internal/health"
 	"github.com/nzkbuild/PhantomClaw/internal/memory"
 )
 
@@ -26,6 +27,8 @@ type NewsFetcher struct {
 	db         *memory.DB
 	client     *http.Client
 	failPolicy FailPolicy
+	limiter    *health.RateLimiter
+	recovery   *health.Recovery
 }
 
 // FailPolicy controls how fetch/parsing failures are handled in safety checks.
@@ -37,11 +40,13 @@ const (
 )
 
 // NewNewsFetcher creates a news fetcher with cache support.
-func NewNewsFetcher(db *memory.DB, failPolicy string) *NewsFetcher {
+func NewNewsFetcher(db *memory.DB, failPolicy string, limiter *health.RateLimiter, recovery *health.Recovery) *NewsFetcher {
 	return &NewsFetcher{
 		db:         db,
 		client:     &http.Client{Timeout: 10 * time.Second},
 		failPolicy: normalizeFailPolicy(failPolicy),
+		limiter:    limiter,
+		recovery:   recovery,
 	}
 }
 
@@ -64,13 +69,31 @@ func (nf *NewsFetcher) FetchNews() ([]NewsItem, error) {
 	if err == nil && found {
 		items, parseErr := parseNewsCache(cached)
 		if parseErr == nil {
+			if nf.recovery != nil {
+				nf.recovery.RecordSuccess("forexfactory")
+			}
 			return items, nil
 		}
+		if nf.recovery != nil {
+			nf.recovery.RecordError("forexfactory", parseErr)
+		}
+	}
+
+	if nf.limiter != nil && !nf.limiter.Allow("forexfactory") {
+		wait := nf.limiter.WaitTime("forexfactory")
+		err := fmt.Errorf("news: rate limited, retry in %s", wait)
+		if nf.recovery != nil {
+			nf.recovery.RecordError("forexfactory", err)
+		}
+		return nil, err
 	}
 
 	// Fetch from ForexFactory RSS
 	resp, err := nf.client.Get("https://www.forexfactory.com/rss")
 	if err != nil {
+		if nf.recovery != nil {
+			nf.recovery.RecordError("forexfactory", err)
+		}
 		return nil, fmt.Errorf("news: fetch error: %w", err)
 	}
 	defer resp.Body.Close()
@@ -79,6 +102,9 @@ func (nf *NewsFetcher) FetchNews() ([]NewsItem, error) {
 
 	var rss forexFactoryRSS
 	if err := xml.Unmarshal(body, &rss); err != nil {
+		if nf.recovery != nil {
+			nf.recovery.RecordError("forexfactory", err)
+		}
 		return nil, fmt.Errorf("news: parse error: %w", err)
 	}
 
@@ -100,6 +126,10 @@ func (nf *NewsFetcher) FetchNews() ([]NewsItem, error) {
 	if payload, marshalErr := json.Marshal(items); marshalErr == nil {
 		_ = nf.db.SetCache("news_today", string(payload), "forexfactory",
 			time.Now().Add(15*time.Minute))
+	}
+
+	if nf.recovery != nil {
+		nf.recovery.RecordSuccess("forexfactory")
 	}
 
 	return items, nil

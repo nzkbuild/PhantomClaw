@@ -11,6 +11,7 @@
 //--- Input parameters
 input string BridgeHost = "http://127.0.0.1:8765";  // Go agent REST endpoint
 input string BridgeAuthToken = "";                    // Optional token sent in X-Phantom-Bridge-Token
+input string BridgeContractVersion = "v3";            // Sent in X-Phantom-Bridge-Contract
 input int    SignalIntervalSec = 60;                  // Seconds between signal pushes
 input int    RequestTimeoutMs  = 500;                 // Short timeout is fine (async ACK design)
 
@@ -133,6 +134,8 @@ string RequestAgent(string method, string endpoint, string payload)
    string headers = "Content-Type: application/json\r\n";
    if(BridgeAuthToken != "")
       headers += "X-Phantom-Bridge-Token: " + BridgeAuthToken + "\r\n";
+   if(BridgeContractVersion != "")
+      headers += "X-Phantom-Bridge-Contract: " + BridgeContractVersion + "\r\n";
    char   postData[];
    char   result[];
    string resultHeaders;
@@ -191,8 +194,15 @@ void PollDecision()
 //+------------------------------------------------------------------+
 void ProcessResponse(string response)
 {
+   if(StringLen(response) == 0) return;
+
    // Parse action field
    string action = ExtractJSONString(response, "action");
+   if(action == "")
+   {
+      Print("PhantomClaw: invalid response payload (missing action): ", response);
+      return;
+   }
 
    if(action == "HOLD") return;
 
@@ -204,6 +214,12 @@ void ProcessResponse(string response)
       double lot    = ExtractJSONDouble(response, "lot");
       double sl     = ExtractJSONDouble(response, "sl");
       double tp     = ExtractJSONDouble(response, "tp");
+
+      if(symbol == "" || level <= 0.0 || lot <= 0.0)
+      {
+         Print("PhantomClaw: invalid PLACE_PENDING response (symbol/level/lot): ", response);
+         return;
+      }
 
       ENUM_ORDER_TYPE orderType;
       if(type == "BUY_LIMIT")       orderType = ORDER_TYPE_BUY_LIMIT;
@@ -217,6 +233,11 @@ void ProcessResponse(string response)
    else if(action == "CANCEL_PENDING")
    {
       long ticket = (long)ExtractJSONDouble(response, "ticket");
+      if(ticket <= 0)
+      {
+         Print("PhantomClaw: invalid CANCEL_PENDING response (ticket): ", response);
+         return;
+      }
       CancelPendingOrder(ticket);
    }
    else if(action == "MODIFY_PENDING")
@@ -224,12 +245,26 @@ void ProcessResponse(string response)
       long   ticket = (long)ExtractJSONDouble(response, "ticket");
       double newSL  = ExtractJSONDouble(response, "sl");
       double newTP  = ExtractJSONDouble(response, "tp");
+      if(ticket <= 0)
+      {
+         Print("PhantomClaw: invalid MODIFY_PENDING response (ticket): ", response);
+         return;
+      }
       ModifyPendingOrder(ticket, newSL, newTP);
    }
    else if(action == "MARKET_CLOSE")
    {
       long ticket = (long)ExtractJSONDouble(response, "ticket");
+      if(ticket <= 0)
+      {
+         Print("PhantomClaw: invalid MARKET_CLOSE response (ticket): ", response);
+         return;
+      }
       ClosePosition(ticket);
+   }
+   else
+   {
+      Print("PhantomClaw: unknown action: ", action, " payload=", response);
    }
 }
 
@@ -410,26 +445,114 @@ void OnTradeTransaction(
 //+------------------------------------------------------------------+
 string ExtractJSONString(string json, string key)
 {
-   string search = "\"" + key + "\":\"";
-   int start = StringFind(json, search);
-   if(start < 0) return "";
-   start += StringLen(search);
-   int end = StringFind(json, "\"", start);
-   if(end < 0) return "";
-   return StringSubstr(json, start, end - start);
+   int valuePos = FindJSONValueStart(json, key);
+   if(valuePos < 0) return "";
+
+   int len = StringLen(json);
+   if(valuePos >= len || StringSubstr(json, valuePos, 1) != "\"") return "";
+   int i = valuePos + 1;
+   string out = "";
+   bool escaped = false;
+   while(i < len)
+   {
+      string ch = StringSubstr(json, i, 1);
+      if(escaped)
+      {
+         out += ch;
+         escaped = false;
+      }
+      else if(ch == "\\")
+      {
+         escaped = true;
+      }
+      else if(ch == "\"")
+      {
+         return out;
+      }
+      else
+      {
+         out += ch;
+      }
+      i++;
+   }
+   return "";
 }
 
 double ExtractJSONDouble(string json, string key)
 {
-   string search = "\"" + key + "\":";
-   int start = StringFind(json, search);
+   int start = FindJSONValueStart(json, key);
    if(start < 0) return 0;
-   start += StringLen(search);
-   // Find end: comma, }, or end of string
-   int endComma = StringFind(json, ",", start);
-   int endBrace = StringFind(json, "}", start);
-   int end = (endComma >= 0 && endComma < endBrace) ? endComma : endBrace;
-   if(end < 0) return 0;
-   return StringToDouble(StringSubstr(json, start, end - start));
+
+   int len = StringLen(json);
+   int i = start;
+
+   // Optional quote handling for numeric strings.
+   bool quoted = false;
+   if(i < len && StringSubstr(json, i, 1) == "\"")
+   {
+      quoted = true;
+      i++;
+   }
+
+   string num = "";
+   while(i < len)
+   {
+      string ch = StringSubstr(json, i, 1);
+      bool isDigit = (ch >= "0" && ch <= "9");
+      if(isDigit || ch == "-" || ch == "+" || ch == "." || ch == "e" || ch == "E")
+      {
+         num += ch;
+         i++;
+         continue;
+      }
+      if(quoted && ch == "\"") break;
+      if(!quoted && (ch == "," || ch == "}" || ch == "]")) break;
+      if(ch == " " || ch == "\t" || ch == "\r" || ch == "\n")
+      {
+         if(StringLen(num) > 0) break;
+         i++;
+         continue;
+      }
+      break;
+   }
+
+   if(StringLen(num) == 0) return 0;
+   return StringToDouble(num);
+}
+
+int FindJSONValueStart(string json, string key)
+{
+   string search = "\"" + key + "\"";
+   int keyPos = StringFind(json, search);
+   if(keyPos < 0) return -1;
+
+   int i = keyPos + StringLen(search);
+   int len = StringLen(json);
+   while(i < len)
+   {
+      string ch = StringSubstr(json, i, 1);
+      if(ch == ":")
+      {
+         i++;
+         break;
+      }
+      if(ch == " " || ch == "\t" || ch == "\r" || ch == "\n")
+      {
+         i++;
+         continue;
+      }
+      return -1;
+   }
+   while(i < len)
+   {
+      string ch = StringSubstr(json, i, 1);
+      if(ch == " " || ch == "\t" || ch == "\r" || ch == "\n")
+      {
+         i++;
+         continue;
+      }
+      return i;
+   }
+   return -1;
 }
 //+------------------------------------------------------------------+

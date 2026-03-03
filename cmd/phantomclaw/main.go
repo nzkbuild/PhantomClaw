@@ -108,6 +108,17 @@ func main() {
 	}
 	logger.Infow("safety: mode set", "mode", safetyMgr.CurrentMode())
 
+	// --- Error recovery ---
+	recovery := health.NewRecovery(func(component, action string) {
+		logger.Warnw("recovery: action triggered", "component", component, "action", action)
+		if action == "halt" {
+			safetyMgr.SetMode(safety.ModeHalt)
+		}
+	})
+
+	// --- Rate limiter ---
+	rateLimiter := health.NewRateLimiter()
+
 	// --- Skills registry ---
 	bridgeURL := fmt.Sprintf("http://%s:%d", cfg.Bridge.Host, cfg.Bridge.Port)
 	skillReg := skills.NewRegistry()
@@ -180,9 +191,9 @@ func main() {
 	}
 
 	// --- Data connectors ---
-	newsFetcher := market.NewNewsFetcher(db, cfg.Market.FailPolicy)
-	sentimentFetcher := market.NewSentimentFetcher(db)
-	cotFetcher := market.NewCOTFetcher(db)
+	newsFetcher := market.NewNewsFetcher(db, cfg.Market.FailPolicy, rateLimiter, recovery)
+	sentimentFetcher := market.NewSentimentFetcher(db, rateLimiter, recovery)
+	cotFetcher := market.NewCOTFetcher(db, rateLimiter, recovery)
 	logger.Info("market: data connectors initialized (news, sentiment, COT)")
 
 	// --- Memory helpers ---
@@ -303,18 +314,36 @@ func main() {
 		cfg.Bridge.Host,
 		cfg.Bridge.Port,
 		func(ctx context.Context, req *bridge.SignalRequest) *bridge.SignalResponse {
+			recovery.RecordSuccess("bridge")
+
+			if !rateLimiter.Allow("llm") {
+				wait := rateLimiter.WaitTime("llm")
+				err := fmt.Errorf("llm rate limited, retry in %s", wait)
+				recovery.RecordError("llm", err)
+				return &bridge.SignalResponse{Action: "HOLD", Reason: err.Error()}
+			}
+
 			// Reconcile risk engine snapshot from MT5 before evaluating the new signal.
 			riskEngine.SyncAccountSnapshot(req.Equity, req.OpenPos)
 			if brain == nil {
+				recovery.RecordError("llm", fmt.Errorf("agent brain not configured"))
 				return &bridge.SignalResponse{Action: "HOLD", Reason: "agent brain not configured (no LLM API key)"}
 			}
-			return brain.HandleSignal(ctx, req)
+			resp := brain.HandleSignal(ctx, req)
+			if resp != nil && strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp.Reason)), "llm error") {
+				recovery.RecordError("llm", fmt.Errorf("%s", resp.Reason))
+			} else {
+				recovery.RecordSuccess("llm")
+			}
+			return resp
 		},
 		func(req *bridge.TradeResultRequest) {
+			recovery.RecordSuccess("bridge")
 			logger.Infow("trade-result", "symbol", req.Symbol, "direction", req.Direction, "pnl", req.PnL)
 			if brain != nil {
 				brain.HandleTradeResult(context.Background(), req)
 			} else {
+				recovery.RecordError("llm", fmt.Errorf("trade-result handled without brain"))
 				riskEngine.RecordTradeClose(req.PnL)
 			}
 		},
@@ -332,6 +361,7 @@ func main() {
 			Memory:    db,
 			Diary:     diaryWriter,
 			Strategy:  strategyMgr,
+			Chat:      brain,
 		})
 		if err != nil {
 			logger.Fatalf("telegram: %v", err)
@@ -378,19 +408,6 @@ func main() {
 	})
 	healthMonitor.Start()
 	defer healthMonitor.Stop()
-
-	// --- Error recovery ---
-	recovery := health.NewRecovery(func(component, action string) {
-		logger.Warnw("recovery: action triggered", "component", component, "action", action)
-		if action == "halt" {
-			safetyMgr.SetMode(safety.ModeHalt)
-		}
-	})
-	_ = recovery // Available for use in error paths
-
-	// --- Rate limiter ---
-	rateLimiter := health.NewRateLimiter()
-	_ = rateLimiter // Available for data connectors
 
 	// --- Session alerts ---
 	var sessionAlerts *alerts.SessionAlerts

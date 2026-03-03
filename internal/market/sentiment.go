@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nzkbuild/PhantomClaw/internal/health"
 	"github.com/nzkbuild/PhantomClaw/internal/memory"
 )
 
@@ -24,15 +25,19 @@ type SentimentResult struct {
 
 // SentimentFetcher gathers sentiment from Reddit.
 type SentimentFetcher struct {
-	db     *memory.DB
-	client *http.Client
+	db       *memory.DB
+	client   *http.Client
+	limiter  *health.RateLimiter
+	recovery *health.Recovery
 }
 
 // NewSentimentFetcher creates a sentiment fetcher.
-func NewSentimentFetcher(db *memory.DB) *SentimentFetcher {
+func NewSentimentFetcher(db *memory.DB, limiter *health.RateLimiter, recovery *health.Recovery) *SentimentFetcher {
 	return &SentimentFetcher{
-		db:     db,
-		client: &http.Client{Timeout: 10 * time.Second},
+		db:       db,
+		client:   &http.Client{Timeout: 10 * time.Second},
+		limiter:  limiter,
+		recovery: recovery,
 	}
 }
 
@@ -44,8 +49,20 @@ func (sf *SentimentFetcher) FetchSentiment(symbol string) (*SentimentResult, err
 	if err == nil && found {
 		var result SentimentResult
 		if json.Unmarshal([]byte(cached), &result) == nil {
+			if sf.recovery != nil {
+				sf.recovery.RecordSuccess("reddit")
+			}
 			return &result, nil
 		}
+	}
+
+	if sf.limiter != nil && !sf.limiter.Allow("reddit") {
+		wait := sf.limiter.WaitTime("reddit")
+		err := fmt.Errorf("sentiment: rate limited, retry in %s", wait)
+		if sf.recovery != nil {
+			sf.recovery.RecordError("reddit", err)
+		}
+		return nil, err
 	}
 
 	// Fetch from Reddit RSS (r/Forex)
@@ -57,6 +74,9 @@ func (sf *SentimentFetcher) FetchSentiment(symbol string) (*SentimentResult, err
 
 	resp, err := sf.client.Do(req)
 	if err != nil {
+		if sf.recovery != nil {
+			sf.recovery.RecordError("reddit", err)
+		}
 		return nil, fmt.Errorf("sentiment: fetch error: %w", err)
 	}
 	defer resp.Body.Close()
@@ -76,6 +96,9 @@ func (sf *SentimentFetcher) FetchSentiment(symbol string) (*SentimentResult, err
 	}
 
 	if err := json.Unmarshal(body, &redditResp); err != nil {
+		if sf.recovery != nil {
+			sf.recovery.RecordError("reddit", err)
+		}
 		return nil, fmt.Errorf("sentiment: parse error: %w", err)
 	}
 
@@ -112,6 +135,9 @@ func (sf *SentimentFetcher) FetchSentiment(symbol string) (*SentimentResult, err
 	// Cache for 30 minutes
 	resultJSON, _ := json.Marshal(result)
 	sf.db.SetCache(cacheKey, string(resultJSON), "reddit", time.Now().Add(30*time.Minute))
+	if sf.recovery != nil {
+		sf.recovery.RecordSuccess("reddit")
+	}
 
 	return result, nil
 }

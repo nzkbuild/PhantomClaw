@@ -46,3 +46,5 @@ Desktop.ini
 *.tmp
 *.bak
 *.orig
+.gocache/
+.gomodcache/

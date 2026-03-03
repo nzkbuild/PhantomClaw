@@ -25,6 +25,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Durable `cron_jobs` store and cron replay on startup for `cron_add` one-shot jobs
 - Unit tests for durable cron replay, deterministic registry ordering, bridge health version output, and startup lock behavior
 - Single-instance startup lockfile guard (`phantomclaw.lock`)
+- Telegram chat mode toggle command (`/chat on|off|status`) with optional agent-brain responder
+- Bridge admin introspection endpoints: `GET /admin/jobs` and `GET /admin/queue`
+- Bridge contract version header support (`X-Phantom-Bridge-Contract`) with major-version compatibility checks
+- SQLite schema metadata table (`metadata`) with startup schema-version guard
+- Deterministic bridge E2E regression test covering mocked MT5 signal/decision/trade-result plus mocked Telegram chat path
 
 ### Changed
 - EA now attaches `request_id` in signal payloads and includes it when polling `/decision`
@@ -47,6 +52,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Skill registry `List()` and `Names()` now return deterministic sorted order
 - Bridge `/health` version now reflects runtime app version instead of a hardcoded legacy value
 - Health monitor bridge component now performs real `/health` probe instead of constant-OK stub
+- Telegram send path now retries with escaped MarkdownV2 before plain-text fallback
+- EA response parsing now validates required fields per action and uses safer JSON string/number extraction
+- Market connectors (news/sentiment/COT) now wire rate limiter + recovery hooks into live fetch/cache paths
+- Bridge callbacks in main runtime now record recovery events and enforce LLM rate-limit guard in the signal path
+- EA now sends `X-Phantom-Bridge-Contract` header (configurable via `BridgeContractVersion`, default `v3`)
 
 ## [2.0.0] - 2026-03-02
 

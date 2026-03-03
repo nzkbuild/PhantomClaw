@@ -68,13 +68,13 @@ func TestNewsFailPolicyOpenVsClosed(t *testing.T) {
 		}
 	}
 
-	openFetcher := NewNewsFetcher(db, "fail_open")
+	openFetcher := NewNewsFetcher(db, "fail_open", nil, nil)
 	openFetcher.client = makeFailingClient()
 	if openFetcher.HasHighImpactEvent("USD") {
 		t.Fatal("expected fail_open policy to return false on fetch failure")
 	}
 
-	closedFetcher := NewNewsFetcher(db, "fail_closed")
+	closedFetcher := NewNewsFetcher(db, "fail_closed", nil, nil)
 	closedFetcher.client = makeFailingClient()
 	if !closedFetcher.HasHighImpactEvent("USD") {
 		t.Fatal("expected fail_closed policy to return true on fetch failure")

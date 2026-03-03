@@ -17,8 +17,10 @@ import (
 
 const defaultSignalHandlerTimeout = 1500 * time.Millisecond
 const bridgeAuthHeader = "X-Phantom-Bridge-Token"
+const contractVersionHeader = "X-Phantom-Bridge-Contract"
 
 var serviceVersion = "unknown"
+var contractVersion = "v3"
 
 // SetVersion sets the bridge service version shown by /health.
 func SetVersion(v string) {
@@ -26,6 +28,14 @@ func SetVersion(v string) {
 		return
 	}
 	serviceVersion = strings.TrimSpace(v)
+}
+
+// SetContractVersion sets the bridge contract version exposed via headers.
+func SetContractVersion(v string) {
+	if strings.TrimSpace(v) == "" {
+		return
+	}
+	contractVersion = strings.TrimSpace(v)
 }
 
 // SignalRequest is the payload sent by MT5 EA on candle close / threshold breach.
@@ -144,6 +154,8 @@ func NewServer(host string, port int, onSignal SignalHandler, onTradeResult Trad
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /price", s.handlePrice)
 	mux.HandleFunc("GET /account", s.handleAccount)
+	mux.HandleFunc("GET /admin/jobs", s.handleAdminJobs)
+	mux.HandleFunc("GET /admin/queue", s.handleAdminQueue)
 
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", host, port),
@@ -169,7 +181,11 @@ func (s *Server) Stop() error {
 
 // handleSignal processes POST /signal from EA.
 func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
 	if !s.requireAuth(w, r) {
+		return
+	}
+	if !s.requireCompatibleContract(w, r) {
 		return
 	}
 	var req SignalRequest
@@ -236,7 +252,11 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 // handleDecision returns the latest pending/delivered decision by request_id (preferred) or symbol.
 // Read marks pending -> delivered. Consumption is explicit via consume query param or /decision/consume.
 func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
 	if !s.requireAuth(w, r) {
+		return
+	}
+	if !s.requireCompatibleContract(w, r) {
 		return
 	}
 	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
@@ -331,7 +351,11 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 
 // handleDecisionConsume explicitly consumes a delivered/pending decision by request_id.
 func (s *Server) handleDecisionConsume(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
 	if !s.requireAuth(w, r) {
+		return
+	}
+	if !s.requireCompatibleContract(w, r) {
 		return
 	}
 	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
@@ -459,7 +483,11 @@ func (s *Server) nextRequestID(symbol string) string {
 
 // handleTradeResult processes POST /trade-result from EA.
 func (s *Server) handleTradeResult(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
 	if !s.requireAuth(w, r) {
+		return
+	}
+	if !s.requireCompatibleContract(w, r) {
 		return
 	}
 	var req TradeResultRequest
@@ -482,18 +510,24 @@ func (s *Server) handleTradeResult(w http.ResponseWriter, r *http.Request) {
 
 // handleHealth responds to GET /health for monitoring.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	out := map[string]string{
-		"status":  "ok",
-		"service": "phantomclaw",
-		"version": serviceVersion,
+		"status":   "ok",
+		"service":  "phantomclaw",
+		"version":  serviceVersion,
+		"contract": contractVersion,
 	}
 	_ = json.NewEncoder(w).Encode(out)
 }
 
 // handlePrice returns the latest MT5 snapshot for a symbol.
 func (s *Server) handlePrice(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
 	if !s.requireAuth(w, r) {
+		return
+	}
+	if !s.requireCompatibleContract(w, r) {
 		return
 	}
 	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
@@ -524,7 +558,11 @@ func (s *Server) handlePrice(w http.ResponseWriter, r *http.Request) {
 
 // handleAccount returns the latest MT5 account snapshot.
 func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
 	if !s.requireAuth(w, r) {
+		return
+	}
+	if !s.requireCompatibleContract(w, r) {
 		return
 	}
 	s.mu.RLock()
@@ -550,6 +588,52 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
+func (s *Server) handleAdminJobs(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if s.db == nil {
+		http.Error(w, `{"error":"memory db unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	jobs, err := s.db.ListPendingCronJobs()
+	if err != nil {
+		http.Error(w, `{"error":"failed to list jobs"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"count": len(jobs),
+		"jobs":  jobs,
+	})
+}
+
+func (s *Server) handleAdminQueue(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if s.db == nil {
+		http.Error(w, `{"error":"memory db unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	entries, err := s.db.ListActivePendingDecisions(100)
+	if err != nil {
+		http.Error(w, `{"error":"failed to list queue"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"count": len(entries),
+		"queue": entries,
+	})
+}
+
 func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
 	if s.authToken == "" {
 		return true
@@ -564,4 +648,39 @@ func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
 	w.WriteHeader(http.StatusUnauthorized)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
 	return false
+}
+
+func (s *Server) setProtocolHeaders(w http.ResponseWriter) {
+	w.Header().Set(contractVersionHeader, contractVersion)
+}
+
+func (s *Server) requireCompatibleContract(w http.ResponseWriter, r *http.Request) bool {
+	requested := strings.TrimSpace(r.Header.Get(contractVersionHeader))
+	if requested == "" {
+		return true // backward compatible if caller doesn't send a contract header
+	}
+
+	if contractMajor(requested) != contractMajor(contractVersion) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":            "incompatible contract version",
+			"server_contract":  contractVersion,
+			"request_contract": requested,
+		})
+		return false
+	}
+	return true
+}
+
+func contractMajor(v string) string {
+	v = strings.TrimSpace(strings.ToLower(v))
+	if v == "" {
+		return ""
+	}
+	if strings.HasPrefix(v, "v") {
+		v = v[1:]
+	}
+	parts := strings.SplitN(v, ".", 2)
+	return parts[0]
 }

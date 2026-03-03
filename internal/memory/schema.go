@@ -87,6 +87,13 @@ CREATE TABLE IF NOT EXISTS conversations (
     created_at  DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Metadata / schema versioning
+CREATE TABLE IF NOT EXISTS metadata (
+    key         TEXT PRIMARY KEY,
+    value       TEXT    NOT NULL,
+    updated_at  DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Pending bridge decisions (durable queue across restarts)
 CREATE TABLE IF NOT EXISTS pending_decisions (
     request_id    TEXT PRIMARY KEY,

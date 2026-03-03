@@ -15,8 +15,8 @@ Progress source of truth (done/next): `docs/plans/2026-03-02-v3-foundation.md`
 ## Current Status (2026-03-03)
 
 - Phase A reliability scope is completed.
-- Implemented in code: issues `#2 #3 #4 #5 #6 #7 #8 #9 #10 #11 #12 #13 #14 #17 #18 #19 #20 #21 #22 #23 #25 #27`.
-- Next execution focus: Phase C (`#15 #16 #24 #26 #28 #29 #30`).
+- Implemented in code: issues `#2 #3 #4 #5 #6 #7 #8 #9 #10 #11 #12 #13 #14 #15 #16 #17 #18 #19 #20 #21 #22 #23 #24 #25 #26 #27 #28 #29 #30`.
+- Phase C capability upgrade scope is completed.
 
 ---
 
@@ -187,10 +187,10 @@ TARGET (v3):
 - Session/day rollover is timezone-correct
 
 ### Phase C — P2 Capability Upgrade (after core is stable)
-- [ ] Implement issue #15 (optional intelligent Telegram chat mode)
-- [ ] Implement issue #16 (fully safe formatting layer)
-- [ ] Implement issue #24 (EA parser hardening)
-- [ ] Implement issues #26, #28, #29, #30 (observability + test/migration discipline)
+- [x] Implement issue #15 (optional intelligent Telegram chat mode)
+- [x] Implement issue #16 (fully safe formatting layer)
+- [x] Implement issue #24 (EA parser hardening)
+- [x] Implement issues #26, #28, #29, #30 (observability + test/migration discipline)
 
 **Exit criteria:**
 - Telegram can operate as command bot and optional chat bot safely

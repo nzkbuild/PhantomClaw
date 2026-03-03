@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/go-telegram/bot/models"
@@ -47,5 +48,30 @@ func TestIsAuthorizedRejectsNilPayloads(t *testing.T) {
 	}
 	if tb.isAuthorized(&models.Update{}) {
 		t.Fatal("expected empty update to be unauthorized")
+	}
+}
+
+func TestEscapeMarkdownV2EscapesReservedCharacters(t *testing.T) {
+	in := "_*[]()~`>#+-=|{}.!\\"
+	out := escapeMarkdownV2(in)
+	for _, ch := range []string{"_", "*", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!", "\\"} {
+		if !strings.Contains(out, `\`+ch) {
+			t.Fatalf("expected escaped %q in output %q", ch, out)
+		}
+	}
+}
+
+func TestChatModeToggleHelpers(t *testing.T) {
+	tb := &Bot{}
+	if tb.isChatModeEnabled() {
+		t.Fatal("expected chat mode disabled by default")
+	}
+	tb.setChatMode(true)
+	if !tb.isChatModeEnabled() {
+		t.Fatal("expected chat mode enabled")
+	}
+	tb.setChatMode(false)
+	if tb.isChatModeEnabled() {
+		t.Fatal("expected chat mode disabled")
 	}
 }

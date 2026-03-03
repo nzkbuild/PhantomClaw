@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nzkbuild/PhantomClaw/internal/health"
 	"github.com/nzkbuild/PhantomClaw/internal/memory"
 )
 
@@ -31,15 +32,19 @@ type COTData struct {
 
 // COTFetcher retrieves CFTC Commitments of Traders data.
 type COTFetcher struct {
-	db     *memory.DB
-	client *http.Client
+	db       *memory.DB
+	client   *http.Client
+	limiter  *health.RateLimiter
+	recovery *health.Recovery
 }
 
 // NewCOTFetcher creates a COT data fetcher with cache support.
-func NewCOTFetcher(db *memory.DB) *COTFetcher {
+func NewCOTFetcher(db *memory.DB, limiter *health.RateLimiter, recovery *health.Recovery) *COTFetcher {
 	return &COTFetcher{
-		db:     db,
-		client: &http.Client{Timeout: 30 * time.Second},
+		db:       db,
+		client:   &http.Client{Timeout: 30 * time.Second},
+		limiter:  limiter,
+		recovery: recovery,
 	}
 }
 
@@ -61,8 +66,15 @@ func (cf *COTFetcher) FetchCOT(symbol string) (*COTData, error) {
 	cacheKey := "cot_" + symbol
 	cached, found, err := cf.db.GetCache(cacheKey)
 	if err == nil && found {
-		if parsed, parseErr := parseCOTCache(cached); parseErr == nil {
+		parsed, parseErr := parseCOTCache(cached)
+		if parseErr == nil {
+			if cf.recovery != nil {
+				cf.recovery.RecordSuccess("cftc")
+			}
 			return parsed, nil
+		}
+		if cf.recovery != nil {
+			cf.recovery.RecordError("cftc", parseErr)
 		}
 	}
 
@@ -75,9 +87,20 @@ func (cf *COTFetcher) FetchCOT(symbol string) (*COTData, error) {
 	// Using the current year's disaggregated futures report
 	year := time.Now().Year()
 	url := fmt.Sprintf("https://www.cftc.gov/dea/newcot/deacom%d.txt", year)
+	if cf.limiter != nil && !cf.limiter.Allow("cftc") {
+		wait := cf.limiter.WaitTime("cftc")
+		err := fmt.Errorf("cot: rate limited, retry in %s", wait)
+		if cf.recovery != nil {
+			cf.recovery.RecordError("cftc", err)
+		}
+		return nil, err
+	}
 
 	resp, err := cf.client.Get(url)
 	if err != nil {
+		if cf.recovery != nil {
+			cf.recovery.RecordError("cftc", err)
+		}
 		return nil, fmt.Errorf("cot: fetch error: %w", err)
 	}
 	defer resp.Body.Close()
@@ -100,7 +123,11 @@ func (cf *COTFetcher) FetchCOT(symbol string) (*COTData, error) {
 	}
 
 	if latestRow == nil {
-		return nil, fmt.Errorf("cot: no data found for %s (%s)", symbol, contractName)
+		err := fmt.Errorf("cot: no data found for %s (%s)", symbol, contractName)
+		if cf.recovery != nil {
+			cf.recovery.RecordError("cftc", err)
+		}
+		return nil, err
 	}
 
 	data := parseCOTRow(symbol, latestRow)
@@ -108,6 +135,9 @@ func (cf *COTFetcher) FetchCOT(symbol string) (*COTData, error) {
 	// Cache for 7 days (weekly report)
 	if payload, marshalErr := json.Marshal(data); marshalErr == nil {
 		_ = cf.db.SetCache(cacheKey, string(payload), "cftc", time.Now().Add(7*24*time.Hour))
+	}
+	if cf.recovery != nil {
+		cf.recovery.RecordSuccess("cftc")
 	}
 
 	return data, nil

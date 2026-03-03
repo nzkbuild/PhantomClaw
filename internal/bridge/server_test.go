@@ -474,6 +474,7 @@ func TestBridgeAuthAllowsAuthorizedRequests(t *testing.T) {
 
 func TestHealthUsesConfiguredVersion(t *testing.T) {
 	SetVersion("9.9.9-test")
+	SetContractVersion("v3.2")
 	s := NewServer("127.0.0.1", 0, nil, nil, nil, "")
 
 	rec := httptest.NewRecorder()
@@ -489,6 +490,73 @@ func TestHealthUsesConfiguredVersion(t *testing.T) {
 	}
 	if payload["version"] != "9.9.9-test" {
 		t.Fatalf("version=%q, want=%q", payload["version"], "9.9.9-test")
+	}
+	if payload["contract"] != "v3.2" {
+		t.Fatalf("contract=%q, want=%q", payload["contract"], "v3.2")
+	}
+}
+
+func TestBridgeRejectsIncompatibleContractVersion(t *testing.T) {
+	SetContractVersion("v3")
+	s := NewServer("127.0.0.1", 0, nil, nil, nil, "")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/decision?symbol=EURUSD", nil)
+	req.Header.Set(contractVersionHeader, "v2")
+	s.handleDecision(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want=%d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestAdminEndpointsExposeJobsAndQueue(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "bridge-admin.db")
+	db, err := memory.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.UpsertCronJob("job-1", "EURUSD", "recheck", time.Now().Add(2*time.Minute)); err != nil {
+		t.Fatalf("UpsertCronJob: %v", err)
+	}
+	if err := db.UpsertPendingDecision("req-1", "XAUUSD", `{"action":"HOLD"}`, time.Now().Add(5*time.Minute)); err != nil {
+		t.Fatalf("UpsertPendingDecision: %v", err)
+	}
+
+	s := NewServer("127.0.0.1", 0, nil, nil, db, "")
+
+	jobsRec := httptest.NewRecorder()
+	jobsReq := httptest.NewRequest(http.MethodGet, "/admin/jobs", nil)
+	s.handleAdminJobs(jobsRec, jobsReq)
+	if jobsRec.Code != http.StatusOK {
+		t.Fatalf("jobs status=%d body=%s", jobsRec.Code, jobsRec.Body.String())
+	}
+	var jobsPayload struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(jobsRec.Body.Bytes(), &jobsPayload); err != nil {
+		t.Fatalf("decode jobs payload: %v", err)
+	}
+	if jobsPayload.Count != 1 {
+		t.Fatalf("jobs count=%d, want=1", jobsPayload.Count)
+	}
+
+	queueRec := httptest.NewRecorder()
+	queueReq := httptest.NewRequest(http.MethodGet, "/admin/queue", nil)
+	s.handleAdminQueue(queueRec, queueReq)
+	if queueRec.Code != http.StatusOK {
+		t.Fatalf("queue status=%d body=%s", queueRec.Code, queueRec.Body.String())
+	}
+	var queuePayload struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(queueRec.Body.Bytes(), &queuePayload); err != nil {
+		t.Fatalf("decode queue payload: %v", err)
+	}
+	if queuePayload.Count != 1 {
+		t.Fatalf("queue count=%d, want=1", queuePayload.Count)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -14,6 +15,8 @@ import (
 type DB struct {
 	conn *sql.DB
 }
+
+const currentSchemaVersion = 1
 
 // NewDB opens (or creates) the SQLite database at the given path,
 // runs the schema migration, and returns a ready DB handle.
@@ -41,7 +44,37 @@ func NewDB(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("memory: run schema: %w", err)
 	}
 
+	if err := ensureSchemaVersion(conn); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("memory: schema version check failed: %w", err)
+	}
+
 	return &DB{conn: conn}, nil
+}
+
+func ensureSchemaVersion(conn *sql.DB) error {
+	var value string
+	err := conn.QueryRow(`SELECT value FROM metadata WHERE key = 'schema_version'`).Scan(&value)
+	if err == sql.ErrNoRows {
+		_, insErr := conn.Exec(`
+			INSERT INTO metadata (key, value, updated_at)
+			VALUES ('schema_version', ?, datetime('now'))`,
+			strconv.Itoa(currentSchemaVersion),
+		)
+		return insErr
+	}
+	if err != nil {
+		return err
+	}
+
+	existing, convErr := strconv.Atoi(value)
+	if convErr != nil {
+		return fmt.Errorf("invalid schema_version value: %q", value)
+	}
+	if existing != currentSchemaVersion {
+		return fmt.Errorf("expected schema_version=%d but found=%d", currentSchemaVersion, existing)
+	}
+	return nil
 }
 
 // Close closes the database connection.
@@ -416,4 +449,41 @@ func (db *DB) MarkCronJobFired(jobID string) error {
 		jobID,
 	)
 	return err
+}
+
+// PendingDecisionRecord is an inspectable queue entry for admin endpoints.
+type PendingDecisionRecord struct {
+	RequestID string    `json:"request_id"`
+	Symbol    string    `json:"symbol"`
+	Status    string    `json:"status"`
+	UpdatedAt time.Time `json:"updated_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// ListActivePendingDecisions lists non-consumed queue entries, newest first.
+func (db *DB) ListActivePendingDecisions(limit int) ([]PendingDecisionRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	rows, err := db.conn.Query(`
+		SELECT request_id, symbol, status, updated_at, expires_at
+		FROM pending_decisions
+		WHERE status IN ('pending', 'delivered')
+		ORDER BY updated_at DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []PendingDecisionRecord
+	for rows.Next() {
+		var row PendingDecisionRecord
+		if err := rows.Scan(&row.RequestID, &row.Symbol, &row.Status, &row.UpdatedAt, &row.ExpiresAt); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
