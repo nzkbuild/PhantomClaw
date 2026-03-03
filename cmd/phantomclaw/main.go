@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -65,6 +68,15 @@ func main() {
 	zap.ReplaceGlobals(zapLogger)
 	logger := zapLogger.Sugar()
 	logger.Infow("config loaded", "mode", cfg.Bot.Mode, "tz", cfg.Bot.Timezone, "pairs", cfg.Pairs)
+
+	// --- Single-instance guard ---
+	lockPath := filepath.Join(filepath.Dir(cfg.Memory.DBPath), "phantomclaw.lock")
+	lock, err := acquireSingleInstanceLock(lockPath)
+	if err != nil {
+		logger.Fatalf("startup guard: %v", err)
+	}
+	defer releaseSingleInstanceLock(lock, lockPath)
+	logger.Infow("startup guard: lock acquired", "path", lockPath)
 
 	// --- Initialize SQLite ---
 	db, err := memory.NewDB(cfg.Memory.DBPath)
@@ -168,7 +180,7 @@ func main() {
 	}
 
 	// --- Data connectors ---
-	newsFetcher := market.NewNewsFetcher(db)
+	newsFetcher := market.NewNewsFetcher(db, cfg.Market.FailPolicy)
 	sentimentFetcher := market.NewSentimentFetcher(db)
 	cotFetcher := market.NewCOTFetcher(db)
 	logger.Info("market: data connectors initialized (news, sentiment, COT)")
@@ -211,16 +223,23 @@ func main() {
 	defer sched.Stop()
 
 	// Register cron_add tool now that scheduler exists
-	skillReg.Register(skills.CronAddSkill(skills.CronDeps{
+	cronDeps := skills.CronDeps{
 		Scheduler: sched,
+		DB:        db,
 		OnWake: func(pair, reason string) {
 			logger.Infow("cron_add: agent recheck triggered", "pair", pair, "reason", reason)
 		},
-	}))
+	}
+	if err := skills.ReplayPendingCronJobs(cronDeps); err != nil {
+		logger.Warnw("cron_add: failed to replay pending jobs", "error", err)
+	} else {
+		logger.Info("cron_add: replayed pending durable jobs")
+	}
+	skillReg.Register(skills.CronAddSkill(cronDeps))
 
 	// --- Session store (conversation history) ---
 	sessionsDir := cfg.Memory.SessionsDir
-	sessionStore, err := memory.NewSessionStore(sessionsDir)
+	sessionStore, err := memory.NewSessionStore(sessionsDir, cfg.Bot.Timezone)
 	if err != nil {
 		logger.Warnw("sessions: failed to create store", "error", err)
 	} else {
@@ -272,6 +291,14 @@ func main() {
 	}
 
 	// --- MT5 REST bridge ---
+	bridge.SetVersion(version)
+	bridgeAuthToken := strings.TrimSpace(cfg.Bridge.AuthToken)
+	if bridgeAuthToken == "" {
+		logger.Warn("bridge: auth token not set; bridge endpoints are open to local callers")
+	} else {
+		logger.Info("bridge: auth token enabled for bridge endpoints")
+	}
+
 	bridgeServer := bridge.NewServer(
 		cfg.Bridge.Host,
 		cfg.Bridge.Port,
@@ -292,6 +319,7 @@ func main() {
 			}
 		},
 		db,
+		bridgeAuthToken,
 	)
 
 	// --- Telegram bot ---
@@ -323,7 +351,30 @@ func main() {
 		return health.StatusOK
 	})
 	healthMonitor.Register("bridge", func() health.Status {
-		return health.StatusOK // Bridge is local, always up if process is running
+		healthURL := fmt.Sprintf("http://%s:%d/health", cfg.Bridge.Host, cfg.Bridge.Port)
+		req, err := http.NewRequest(http.MethodGet, healthURL, nil)
+		if err != nil {
+			return health.StatusDown
+		}
+		client := &http.Client{Timeout: 750 * time.Millisecond}
+		resp, err := client.Do(req)
+		if err != nil {
+			return health.StatusDown
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return health.StatusDown
+		}
+		var payload struct {
+			Status string `json:"status"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			return health.StatusDegraded
+		}
+		if strings.ToLower(strings.TrimSpace(payload.Status)) != "ok" {
+			return health.StatusDegraded
+		}
+		return health.StatusOK
 	})
 	healthMonitor.Start()
 	defer healthMonitor.Stop()

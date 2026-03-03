@@ -18,6 +18,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - `makeSessionAlertSender` helper + unit tests for session alert dispatch
 - Bridge signal context timeout test (`TestSignalContextTimeout`)
 - Trade-result contract tests for mandatory `entry` (`TestTradeResultIncludesEntry`, `TestTradeResultRejectsMissingEntry`)
+- Optional bridge endpoint auth token (`bridge.auth_token`) enforced via `X-Phantom-Bridge-Token`
+- Bridge auth tests for unauthorized rejection and authorized request flow
+- `market.fail_policy` config (`fail_open` / `fail_closed`) for news-gate behavior during fetch/parse outages
+- Unit tests for configured learning windows, timezone-aware session files, and market cache/fail-policy behavior
+- Durable `cron_jobs` store and cron replay on startup for `cron_add` one-shot jobs
+- Unit tests for durable cron replay, deterministic registry ordering, bridge health version output, and startup lock behavior
+- Single-instance startup lockfile guard (`phantomclaw.lock`)
 
 ### Changed
 - EA now attaches `request_id` in signal payloads and includes it when polling `/decision`
@@ -33,6 +40,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Bridge `/trade-result` now validates that `entry` is present and `> 0` before processing
 - EA trade-result payload now includes resolved weighted entry price from position history
 - Documentation synced for v3 Phase A completion status and bridge protocol contract details
+- EA now supports `BridgeAuthToken` input and sends it as `X-Phantom-Bridge-Token` when configured
+- Safety learning-hours enforcement now uses configured session window values (supports wrap-around windows)
+- Session JSONL day partitioning now uses configured bot timezone instead of host-local timezone
+- News and COT market caches now persist typed JSON payloads and decode from JSON on cache reads
+- Skill registry `List()` and `Names()` now return deterministic sorted order
+- Bridge `/health` version now reflects runtime app version instead of a hardcoded legacy value
+- Health monitor bridge component now performs real `/health` probe instead of constant-OK stub
 
 ## [2.0.0] - 2026-03-02
 

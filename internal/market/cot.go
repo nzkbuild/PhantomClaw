@@ -2,6 +2,7 @@ package market
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,7 +61,9 @@ func (cf *COTFetcher) FetchCOT(symbol string) (*COTData, error) {
 	cacheKey := "cot_" + symbol
 	cached, found, err := cf.db.GetCache(cacheKey)
 	if err == nil && found {
-		return parseCOTCache(cached), nil
+		if parsed, parseErr := parseCOTCache(cached); parseErr == nil {
+			return parsed, nil
+		}
 	}
 
 	contractName, ok := symbolToCFTC[symbol]
@@ -103,7 +106,9 @@ func (cf *COTFetcher) FetchCOT(symbol string) (*COTData, error) {
 	data := parseCOTRow(symbol, latestRow)
 
 	// Cache for 7 days (weekly report)
-	cf.db.SetCache(cacheKey, fmt.Sprintf("%v", data), "cftc", time.Now().Add(7*24*time.Hour))
+	if payload, marshalErr := json.Marshal(data); marshalErr == nil {
+		_ = cf.db.SetCache(cacheKey, string(payload), "cftc", time.Now().Add(7*24*time.Hour))
+	}
 
 	return data, nil
 }
@@ -136,7 +141,10 @@ func parseCOTRow(symbol string, row []string) *COTData {
 	return data
 }
 
-func parseCOTCache(cached string) *COTData {
-	// Simplified — in production, cache as JSON
-	return nil
+func parseCOTCache(cached string) (*COTData, error) {
+	var data COTData
+	if err := json.Unmarshal([]byte(cached), &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
 }

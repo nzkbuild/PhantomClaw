@@ -15,8 +15,8 @@ Progress source of truth (done/next): `docs/plans/2026-03-02-v3-foundation.md`
 ## Current Status (2026-03-02)
 
 - Phase A reliability scope is completed.
-- Implemented in code: issues `#2 #3 #4 #5 #8 #9 #10 #13 #14 #17 #23`.
-- Next execution focus: Phase B (`#11 #12 #18 #19 #20 #21 #22 #7 #25 #27`).
+- Implemented in code: issues `#2 #3 #4 #5 #6 #7 #8 #9 #10 #11 #12 #13 #14 #17 #18 #19 #20 #21 #22 #23 #25 #27`.
+- Next execution focus: Phase C (`#15 #16 #24 #26 #28 #29 #30`).
 
 ---
 

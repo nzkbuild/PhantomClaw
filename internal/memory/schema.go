@@ -109,4 +109,17 @@ CREATE INDEX IF NOT EXISTS idx_cache_expires    ON market_cache(expires_at);
 CREATE INDEX IF NOT EXISTS idx_ram_expires      ON session_ram(expires_at);
 CREATE INDEX IF NOT EXISTS idx_pending_symbol_status ON pending_decisions(symbol, status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_pending_expires       ON pending_decisions(expires_at);
+
+-- Durable agent-scheduled recheck jobs
+CREATE TABLE IF NOT EXISTS cron_jobs (
+    job_id       TEXT PRIMARY KEY,
+    pair         TEXT    NOT NULL,
+    reason       TEXT    NOT NULL,
+    wake_at      DATETIME NOT NULL,
+    status       TEXT    NOT NULL DEFAULT 'pending', -- pending | fired | cancelled
+    created_at   DATETIME NOT NULL DEFAULT (datetime('now')),
+    updated_at   DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_cron_jobs_status_wake ON cron_jobs(status, wake_at);
 `

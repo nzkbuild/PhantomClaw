@@ -91,3 +91,40 @@ func TestPendingDecisionLifecycle(t *testing.T) {
 		t.Fatalf("status=%q, want=expired", queryStatus)
 	}
 }
+
+func TestCronJobLifecycle(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "memory.db")
+	db, err := NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	wakeAt := time.Now().Add(2 * time.Minute)
+	if err := db.UpsertCronJob("job-1", "EURUSD", "recheck trend", wakeAt); err != nil {
+		t.Fatalf("UpsertCronJob: %v", err)
+	}
+
+	jobs, err := db.ListPendingCronJobs()
+	if err != nil {
+		t.Fatalf("ListPendingCronJobs: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("len(jobs)=%d, want=1", len(jobs))
+	}
+	if jobs[0].JobID != "job-1" || jobs[0].Pair != "EURUSD" || jobs[0].Status != "pending" {
+		t.Fatalf("unexpected job: %+v", jobs[0])
+	}
+
+	if err := db.MarkCronJobFired("job-1"); err != nil {
+		t.Fatalf("MarkCronJobFired: %v", err)
+	}
+
+	var status string
+	if err := db.QueryRow("SELECT status FROM cron_jobs WHERE job_id = ?", "job-1").Scan(&status); err != nil {
+		t.Fatalf("read cron job status: %v", err)
+	}
+	if status != "fired" {
+		t.Fatalf("status=%q, want=fired", status)
+	}
+}

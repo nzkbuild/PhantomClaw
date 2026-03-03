@@ -3,6 +3,7 @@ package skills
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -51,8 +52,15 @@ func (r *Registry) List() []map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var tools []map[string]any
-	for _, s := range r.skills {
+	names := make([]string, 0, len(r.skills))
+	for name := range r.skills {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	tools := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		s := r.skills[name]
 		tools = append(tools, map[string]any{
 			"name":        s.Name,
 			"description": s.Description,
@@ -70,5 +78,6 @@ func (r *Registry) Names() []string {
 	for name := range r.skills {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }

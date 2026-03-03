@@ -1,6 +1,7 @@
 package market
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -22,15 +23,25 @@ type NewsItem struct {
 
 // NewsFetcher retrieves economic news from ForexFactory calendar (RSS).
 type NewsFetcher struct {
-	db     *memory.DB
-	client *http.Client
+	db         *memory.DB
+	client     *http.Client
+	failPolicy FailPolicy
 }
 
+// FailPolicy controls how fetch/parsing failures are handled in safety checks.
+type FailPolicy string
+
+const (
+	FailPolicyOpen   FailPolicy = "fail_open"
+	FailPolicyClosed FailPolicy = "fail_closed"
+)
+
 // NewNewsFetcher creates a news fetcher with cache support.
-func NewNewsFetcher(db *memory.DB) *NewsFetcher {
+func NewNewsFetcher(db *memory.DB, failPolicy string) *NewsFetcher {
 	return &NewsFetcher{
-		db:     db,
-		client: &http.Client{Timeout: 10 * time.Second},
+		db:         db,
+		client:     &http.Client{Timeout: 10 * time.Second},
+		failPolicy: normalizeFailPolicy(failPolicy),
 	}
 }
 
@@ -51,7 +62,10 @@ func (nf *NewsFetcher) FetchNews() ([]NewsItem, error) {
 	// Check cache first (15-min TTL)
 	cached, found, err := nf.db.GetCache("news_today")
 	if err == nil && found {
-		return parseNewsCache(cached), nil
+		items, parseErr := parseNewsCache(cached)
+		if parseErr == nil {
+			return items, nil
+		}
 	}
 
 	// Fetch from ForexFactory RSS
@@ -72,17 +86,21 @@ func (nf *NewsFetcher) FetchNews() ([]NewsItem, error) {
 	for _, item := range rss.Channel.Items {
 		impact := classifyImpact(item.Title)
 		currency := extractCurrency(item.Title)
+		pubDate, _ := time.Parse(time.RFC1123Z, item.PubDate)
 		items = append(items, NewsItem{
 			Title:    item.Title,
 			Impact:   impact,
 			Currency: currency,
+			Time:     pubDate,
 			Source:   "forexfactory",
 		})
 	}
 
 	// Cache for 15 minutes
-	nf.db.SetCache("news_today", fmt.Sprintf("%v", items), "forexfactory",
-		time.Now().Add(15*time.Minute))
+	if payload, marshalErr := json.Marshal(items); marshalErr == nil {
+		_ = nf.db.SetCache("news_today", string(payload), "forexfactory",
+			time.Now().Add(15*time.Minute))
+	}
 
 	return items, nil
 }
@@ -91,7 +109,7 @@ func (nf *NewsFetcher) FetchNews() ([]NewsItem, error) {
 func (nf *NewsFetcher) HasHighImpactEvent(currency string) bool {
 	items, err := nf.FetchNews()
 	if err != nil {
-		return false // Fail open — don't block on news fetch errors
+		return nf.failPolicy == FailPolicyClosed
 	}
 	for _, item := range items {
 		if item.Impact == "high" && strings.Contains(item.Currency, currency) {
@@ -128,7 +146,19 @@ func extractCurrency(title string) string {
 	return "UNKNOWN"
 }
 
-func parseNewsCache(cached string) []NewsItem {
-	// Simplified — in production, cache as JSON
-	return nil
+func parseNewsCache(cached string) ([]NewsItem, error) {
+	var items []NewsItem
+	if err := json.Unmarshal([]byte(cached), &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func normalizeFailPolicy(v string) FailPolicy {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case string(FailPolicyClosed):
+		return FailPolicyClosed
+	default:
+		return FailPolicyOpen
+	}
 }

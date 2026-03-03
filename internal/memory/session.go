@@ -22,16 +22,36 @@ type Turn struct {
 // SessionStore persists conversation turns as JSONL files, one per trading day.
 // This gives the agent memory across signals within the same day.
 type SessionStore struct {
-	dir string
-	mu  sync.Mutex
+	dir      string
+	location *time.Location
+	nowFn    func() time.Time
+	mu       sync.Mutex
 }
 
 // NewSessionStore creates a session store that writes to the given directory.
-func NewSessionStore(dir string) (*SessionStore, error) {
+func NewSessionStore(dir, timezone string) (*SessionStore, error) {
+	return NewSessionStoreWithClock(dir, timezone, nil)
+}
+
+// NewSessionStoreWithClock creates a session store with an injectable clock for tests.
+func NewSessionStoreWithClock(dir, timezone string, nowFn func() time.Time) (*SessionStore, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("session: create dir: %w", err)
 	}
-	return &SessionStore{dir: dir}, nil
+	loc := time.Local
+	if timezone != "" {
+		if loaded, err := time.LoadLocation(timezone); err == nil {
+			loc = loaded
+		}
+	}
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	return &SessionStore{
+		dir:      dir,
+		location: loc,
+		nowFn:    nowFn,
+	}, nil
 }
 
 // Append writes a single turn to today's JSONL file.
@@ -40,7 +60,7 @@ func (s *SessionStore) Append(turn Turn) error {
 	defer s.mu.Unlock()
 
 	if turn.Timestamp.IsZero() {
-		turn.Timestamp = time.Now()
+		turn.Timestamp = s.now()
 	}
 
 	path := s.todayPath()
@@ -86,8 +106,15 @@ func (s *SessionStore) TodayTurnCount() int {
 // --- Internal ---
 
 func (s *SessionStore) todayPath() string {
-	date := time.Now().Format("2006-01-02")
+	date := s.now().Format("2006-01-02")
 	return filepath.Join(s.dir, date+".jsonl")
+}
+
+func (s *SessionStore) now() time.Time {
+	if s.nowFn == nil {
+		return time.Now().In(s.location)
+	}
+	return s.nowFn().In(s.location)
 }
 
 func (s *SessionStore) readFile(path string, maxTurns int, pairFilter string) ([]Turn, error) {

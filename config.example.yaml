@@ -3,6 +3,8 @@
 # Keep secrets in environment variables (recommended):
 #   PHANTOM_TELEGRAM_TOKEN
 #   PHANTOM_TELEGRAM_CHAT_ID
+#   PHANTOM_BRIDGE_AUTH_TOKEN
+#   PHANTOM_MARKET_FAIL_POLICY
 #   PHANTOM_LLM_PROVIDERS_0_API_KEY
 #   PHANTOM_LLM_PROVIDERS_1_API_KEY
 #   PHANTOM_LLM_PROVIDERS_2_API_KEY
@@ -62,6 +64,10 @@ llm:
 bridge:
   host: "127.0.0.1"
   port: 8765
+  auth_token: "" # Optional shared secret header for EA bridge (X-Phantom-Bridge-Token)
+
+market:
+  fail_policy: "fail_open" # fail_open | fail_closed
 
 risk:
   max_lot_size: 0.10

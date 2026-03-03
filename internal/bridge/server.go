@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,6 +16,17 @@ import (
 )
 
 const defaultSignalHandlerTimeout = 1500 * time.Millisecond
+const bridgeAuthHeader = "X-Phantom-Bridge-Token"
+
+var serviceVersion = "unknown"
+
+// SetVersion sets the bridge service version shown by /health.
+func SetVersion(v string) {
+	if strings.TrimSpace(v) == "" {
+		return
+	}
+	serviceVersion = strings.TrimSpace(v)
+}
 
 // SignalRequest is the payload sent by MT5 EA on candle close / threshold breach.
 type SignalRequest struct {
@@ -95,6 +107,7 @@ type Server struct {
 	onSignal      SignalHandler
 	onTradeResult TradeResultHandler
 	db            *memory.DB
+	authToken     string
 
 	mu               sync.RWMutex
 	latestBySymbol   map[string]SignalRequest
@@ -108,13 +121,14 @@ type Server struct {
 }
 
 // NewServer creates a new bridge server.
-func NewServer(host string, port int, onSignal SignalHandler, onTradeResult TradeResultHandler, db *memory.DB) *Server {
+func NewServer(host string, port int, onSignal SignalHandler, onTradeResult TradeResultHandler, db *memory.DB, authToken string) *Server {
 	s := &Server{
 		host:             host,
 		port:             port,
 		onSignal:         onSignal,
 		onTradeResult:    onTradeResult,
 		db:               db,
+		authToken:        strings.TrimSpace(authToken),
 		latestBySymbol:   make(map[string]SignalRequest),
 		pendingBySymbol:  make(map[string]SignalResponse),
 		pendingByRequest: make(map[string]SignalResponse),
@@ -155,6 +169,9 @@ func (s *Server) Stop() error {
 
 // handleSignal processes POST /signal from EA.
 func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
 	var req SignalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid payload"}`, http.StatusBadRequest)
@@ -219,6 +236,9 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 // handleDecision returns the latest pending/delivered decision by request_id (preferred) or symbol.
 // Read marks pending -> delivered. Consumption is explicit via consume query param or /decision/consume.
 func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
 	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
 	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
 	consume, consumeExplicit := parseBoolQuery(r.URL.Query().Get("consume"))
@@ -311,6 +331,9 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 
 // handleDecisionConsume explicitly consumes a delivered/pending decision by request_id.
 func (s *Server) handleDecisionConsume(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
 	requestID := strings.TrimSpace(r.URL.Query().Get("request_id"))
 	if requestID == "" {
 		var body struct {
@@ -436,6 +459,9 @@ func (s *Server) nextRequestID(symbol string) string {
 
 // handleTradeResult processes POST /trade-result from EA.
 func (s *Server) handleTradeResult(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
 	var req TradeResultRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid payload"}`, http.StatusBadRequest)
@@ -457,11 +483,19 @@ func (s *Server) handleTradeResult(w http.ResponseWriter, r *http.Request) {
 // handleHealth responds to GET /health for monitoring.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"ok","service":"phantomclaw","version":"0.1.0"}`))
+	out := map[string]string{
+		"status":  "ok",
+		"service": "phantomclaw",
+		"version": serviceVersion,
+	}
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 // handlePrice returns the latest MT5 snapshot for a symbol.
 func (s *Server) handlePrice(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
 	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
 	if symbol == "" {
 		http.Error(w, `{"error":"symbol is required"}`, http.StatusBadRequest)
@@ -490,6 +524,9 @@ func (s *Server) handlePrice(w http.ResponseWriter, r *http.Request) {
 
 // handleAccount returns the latest MT5 account snapshot.
 func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAuth(w, r) {
+		return
+	}
 	s.mu.RLock()
 	account := s.latestAccount
 	hasSample := s.hasAccountSample
@@ -511,4 +548,20 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
+	if s.authToken == "" {
+		return true
+	}
+
+	token := strings.TrimSpace(r.Header.Get(bridgeAuthHeader))
+	if subtle.ConstantTimeCompare([]byte(token), []byte(s.authToken)) == 1 {
+		return true
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+	return false
 }

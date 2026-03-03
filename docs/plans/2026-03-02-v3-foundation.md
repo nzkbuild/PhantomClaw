@@ -12,6 +12,11 @@
 
 ## Progress Log
 
+- 2026-03-03: Issue #6 completed (optional bridge endpoint auth token + EA header support + bridge auth tests).
+- 2026-03-03: Issues #11 and #12 completed (configured learning window enforcement + timezone-aware session day partitioning).
+- 2026-03-03: Issues #18, #19, #20 completed (JSON market cache parsing + typed cache writes + configurable market fail policy).
+- 2026-03-03: Issues #21 and #22 completed (durable cron_add persistence/replay + deterministic skill/tool ordering).
+- 2026-03-03: Issues #7, #25, and #27 completed (bridge /health version parity + real bridge health probe + single-instance startup lock).
 - 2026-03-02: Task 1 completed (bridge `request_id` correlation + EA request_id polling + bridge tests).
 - 2026-03-02: Task 2 completed (durable `pending_decisions` SQLite queue + bridge DB fallback + lifecycle tests).
 - 2026-03-02: Task 3 completed (pending→delivered→consumed decision lifecycle + explicit consume semantics + consume endpoint).

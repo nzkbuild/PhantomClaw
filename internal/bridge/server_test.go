@@ -23,7 +23,7 @@ func TestBridgeRequestCorrelation(t *testing.T) {
 			Symbol: req.Symbol,
 			Reason: "ok",
 		}
-	}, nil, nil)
+	}, nil, nil, "")
 
 	payload := `{
 		"request_id":"req-123",
@@ -89,7 +89,7 @@ func TestBridgeGeneratesRequestIDAndKeepsSymbolCompatibility(t *testing.T) {
 			Symbol: req.Symbol,
 			Reason: "ok",
 		}
-	}, nil, nil)
+	}, nil, nil, "")
 
 	payload := `{
 		"symbol":"XAUUSD",
@@ -149,7 +149,7 @@ func TestBridgeDecisionPersistsInSQLite(t *testing.T) {
 			Symbol: req.Symbol,
 			Reason: "persisted",
 		}
-	}, nil, db)
+	}, nil, db, "")
 
 	payload := `{
 		"request_id":"req-persist",
@@ -215,7 +215,7 @@ func TestBridgeDecisionConsumeEndpoint(t *testing.T) {
 			Symbol: req.Symbol,
 			Reason: "ok",
 		}
-	}, nil, nil)
+	}, nil, nil, "")
 
 	payload := `{
 		"request_id":"req-consume-endpoint",
@@ -266,7 +266,7 @@ func TestSignalContextTimeout(t *testing.T) {
 				Reason: ctx.Err().Error(),
 			}
 		}
-	}, nil, nil)
+	}, nil, nil, "")
 	s.signalTimeout = 25 * time.Millisecond
 
 	payload := `{
@@ -304,7 +304,7 @@ func TestTradeResultIncludesEntry(t *testing.T) {
 	got := make(chan TradeResultRequest, 1)
 	s := NewServer("127.0.0.1", 0, nil, func(req *TradeResultRequest) {
 		got <- *req
-	}, nil)
+	}, nil, "")
 
 	payload := `{
 		"ticket":12345,
@@ -338,7 +338,7 @@ func TestTradeResultRejectsMissingEntry(t *testing.T) {
 	called := false
 	s := NewServer("127.0.0.1", 0, nil, func(req *TradeResultRequest) {
 		called = true
-	}, nil)
+	}, nil, "")
 
 	payload := `{
 		"ticket":12345,
@@ -359,6 +359,136 @@ func TestTradeResultRejectsMissingEntry(t *testing.T) {
 	}
 	if called {
 		t.Fatal("trade-result callback should not be called for invalid payload")
+	}
+}
+
+func TestBridgeAuthRejectsUnauthorizedRequests(t *testing.T) {
+	onSignalCalled := false
+	onTradeResultCalled := false
+	s := NewServer("127.0.0.1", 0, func(ctx context.Context, req *SignalRequest) *SignalResponse {
+		onSignalCalled = true
+		return &SignalResponse{Action: "HOLD"}
+	}, func(req *TradeResultRequest) {
+		onTradeResultCalled = true
+	}, nil, "bridge-secret")
+
+	signalPayload := `{
+		"symbol":"EURUSD",
+		"timeframe":"H1",
+		"bid":1.10000,
+		"ask":1.10020,
+		"spread":2.0,
+		"ohlcv":{"H1":[]},
+		"indicators":{"rsi_14":45.0},
+		"timestamp":"2026-03-02 20:00:00"
+	}`
+	signalRec := httptest.NewRecorder()
+	signalReq := httptest.NewRequest(http.MethodPost, "/signal", strings.NewReader(signalPayload))
+	s.handleSignal(signalRec, signalReq)
+	if signalRec.Code != http.StatusUnauthorized {
+		t.Fatalf("signal status=%d, want=%d", signalRec.Code, http.StatusUnauthorized)
+	}
+	if onSignalCalled {
+		t.Fatal("onSignal should not be called for unauthorized requests")
+	}
+
+	decisionRec := httptest.NewRecorder()
+	decisionReq := httptest.NewRequest(http.MethodGet, "/decision?symbol=EURUSD", nil)
+	s.handleDecision(decisionRec, decisionReq)
+	if decisionRec.Code != http.StatusUnauthorized {
+		t.Fatalf("decision status=%d, want=%d", decisionRec.Code, http.StatusUnauthorized)
+	}
+
+	tradePayload := `{
+		"ticket":12345,
+		"symbol":"EURUSD",
+		"direction":"BUY",
+		"entry":1.10234,
+		"exit":1.10400,
+		"lot":0.10,
+		"pnl":16.6,
+		"closed_at":"2026-03-02 21:00:00"
+	}`
+	tradeRec := httptest.NewRecorder()
+	tradeReq := httptest.NewRequest(http.MethodPost, "/trade-result", strings.NewReader(tradePayload))
+	s.handleTradeResult(tradeRec, tradeReq)
+	if tradeRec.Code != http.StatusUnauthorized {
+		t.Fatalf("trade-result status=%d, want=%d", tradeRec.Code, http.StatusUnauthorized)
+	}
+	if onTradeResultCalled {
+		t.Fatal("onTradeResult should not be called for unauthorized requests")
+	}
+}
+
+func TestBridgeAuthAllowsAuthorizedRequests(t *testing.T) {
+	s := NewServer("127.0.0.1", 0, func(ctx context.Context, req *SignalRequest) *SignalResponse {
+		return &SignalResponse{
+			Action: "PLACE_PENDING",
+			Type:   "BUY_LIMIT",
+			Symbol: req.Symbol,
+			Reason: "ok",
+		}
+	}, nil, nil, "bridge-secret")
+
+	signalPayload := `{
+		"request_id":"req-auth",
+		"symbol":"EURUSD",
+		"timeframe":"H1",
+		"bid":1.10000,
+		"ask":1.10020,
+		"spread":2.0,
+		"ohlcv":{"H1":[]},
+		"indicators":{"rsi_14":45.0},
+		"timestamp":"2026-03-02 20:00:00"
+	}`
+	signalRec := httptest.NewRecorder()
+	signalReq := httptest.NewRequest(http.MethodPost, "/signal", strings.NewReader(signalPayload))
+	signalReq.Header.Set(bridgeAuthHeader, "bridge-secret")
+	s.handleSignal(signalRec, signalReq)
+	if signalRec.Code != http.StatusOK {
+		t.Fatalf("signal status=%d, want=%d", signalRec.Code, http.StatusOK)
+	}
+
+	var decision SignalResponse
+	for i := 0; i < 60; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/decision?request_id=req-auth", nil)
+		req.Header.Set(bridgeAuthHeader, "bridge-secret")
+		s.handleDecision(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("decision status=%d, want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &decision); err != nil {
+			t.Fatalf("decode decision: %v", err)
+		}
+		if decision.Action != "HOLD" || decision.Reason != "no pending decision" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if decision.Action != "PLACE_PENDING" {
+		t.Fatalf("decision action=%q, want=PLACE_PENDING", decision.Action)
+	}
+}
+
+func TestHealthUsesConfiguredVersion(t *testing.T) {
+	SetVersion("9.9.9-test")
+	s := NewServer("127.0.0.1", 0, nil, nil, nil, "")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	s.handleHealth(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health status=%d, want=%d", rec.Code, http.StatusOK)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode health payload: %v", err)
+	}
+	if payload["version"] != "9.9.9-test" {
+		t.Fatalf("version=%q, want=%q", payload["version"], "9.9.9-test")
 	}
 }
 

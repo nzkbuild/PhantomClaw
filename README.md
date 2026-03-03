@@ -80,6 +80,12 @@ $env:PHANTOM_LLM_PROVIDERS_2_API_KEY = "sk-your-groq-key"
 # Required — Telegram
 $env:PHANTOM_TELEGRAM_TOKEN = "123456:ABC-your-bot-token"
 $env:PHANTOM_TELEGRAM_CHAT_ID = "your-chat-id-number"
+
+# Optional but strongly recommended — bridge auth shared secret
+$env:PHANTOM_BRIDGE_AUTH_TOKEN = "set-a-long-random-secret"
+
+# Optional — market feed failure policy
+$env:PHANTOM_MARKET_FAIL_POLICY = "fail_open"  # or fail_closed
 ```
 
 > 💡 The provider order in `config.yaml` determines priority. The first provider with a valid API key becomes primary. If it fails, the bot automatically falls back to the next one.
@@ -120,6 +126,7 @@ If you see `CGO_ENABLED` errors, make sure TDM-GCC is installed and in your PATH
 2. Open MT5 → Navigator → Expert Advisors → right-click → Refresh
 3. Drag `PhantomClaw` onto your XAUUSD H1 chart
 4. **Important:** Go to Tools → Options → Expert Advisors → ✅ Allow WebRequest for listed URLs → Add `http://127.0.0.1:8765`
+5. If bridge auth is enabled, set the EA input `BridgeAuthToken` to the same value as `PHANTOM_BRIDGE_AUTH_TOKEN`
 
 ### Step 6: Run it!
 
@@ -201,6 +208,7 @@ Only the configured `telegram.chat_id` is authorized to control the bot.
 
 - `request_id`: each `/signal` request is correlated to `/decision` polling for deterministic matching.
 - decision lifecycle: `pending -> delivered -> consumed|expired` (with `consume=1` or `POST /decision/consume`).
+- bridge auth: if `bridge.auth_token` is set, EA must send header `X-Phantom-Bridge-Token` with matching value.
 - Telegram ACL: only configured `telegram.chat_id` is authorized for inbound command handling.
 - Trade-result contract: `/trade-result` requires `entry > 0` and rejects invalid payloads.
 
@@ -272,6 +280,7 @@ You can override any setting with environment variables using the `PHANTOM_` pre
 $env:PHANTOM_BOT_MODE = "OBSERVE"
 $env:PHANTOM_RISK_MAX_LOT_SIZE = "0.05"
 $env:PHANTOM_RISK_MAX_DAILY_LOSS_USD = "50"
+$env:PHANTOM_MARKET_FAIL_POLICY = "fail_closed"
 ```
 
 ---
@@ -324,6 +333,9 @@ PhantomClaw/
 ### MT5 EA shows "WebRequest error 4014"
 → You need to allow the URL in MT5: Tools → Options → Expert Advisors → Allow WebRequest → Add `http://127.0.0.1:8765`
 
+### MT5 EA gets HTTP 401 from bridge
+→ `BridgeAuthToken` in EA doesn't match bot `bridge.auth_token` / `PHANTOM_BRIDGE_AUTH_TOKEN`.
+
 ### Bot doesn't respond on Telegram
 → Check your `PHANTOM_TELEGRAM_TOKEN` and `PHANTOM_TELEGRAM_CHAT_ID`, send `/start`, then test `/help` and `/status`.
 
@@ -335,6 +347,9 @@ PhantomClaw/
 ```powershell
 Start-Process -WindowStyle Hidden .\phantomclaw.exe
 ```
+
+### Bot says another instance is already running
+→ A lock file exists at `data/phantomclaw.lock`. Stop the other process, or if it crashed, remove the stale lock file and restart.
 
 ### How do I check if it's running?
 → Send `/status` on Telegram. If you get a reply, it's alive.

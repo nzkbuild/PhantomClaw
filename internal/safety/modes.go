@@ -2,6 +2,7 @@ package safety
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -57,12 +58,16 @@ type SessionWindow struct {
 // Manager handles mode switching with thread-safety and session-aware enforcement.
 // Outside trading hours, mode is forced to OBSERVE regardless of user setting (PRD §9).
 type Manager struct {
-	mu            sync.RWMutex
-	currentMode   Mode
-	userSetMode   Mode // What user requested — restored after session override
-	sessionWindow SessionWindow
-	location      *time.Location
-	onHalt        func() // Callback when HALT is triggered
+	mu                sync.RWMutex
+	currentMode       Mode
+	userSetMode       Mode // What user requested — restored after session override
+	sessionWindow     SessionWindow
+	learningStartMins int
+	learningEndMins   int
+	hasLearningWindow bool
+	location          *time.Location
+	onHalt            func() // Callback when HALT is triggered
+	nowFn             func() time.Time
 }
 
 // NewManager creates a mode manager with the default mode and session windows.
@@ -77,13 +82,30 @@ func NewManager(defaultMode string, sw SessionWindow, tz string, onHalt func()) 
 		loc = time.FixedZone("MYT", 8*60*60) // UTC+8 fallback
 	}
 
-	return &Manager{
+	startMins, startOK := parseHHMMToMinutes(sw.LearningStart)
+	endMins, endOK := parseHHMMToMinutes(sw.LearningEnd)
+
+	m := &Manager{
 		currentMode:   mode,
 		userSetMode:   mode,
 		sessionWindow: sw,
 		location:      loc,
 		onHalt:        onHalt,
-	}, nil
+		nowFn:         time.Now,
+	}
+
+	if startOK && endOK {
+		m.learningStartMins = startMins
+		m.learningEndMins = endMins
+		m.hasLearningWindow = true
+	} else {
+		// Backward-compatible fallback if config is invalid/missing.
+		m.learningStartMins = 0
+		m.learningEndMins = 8 * 60
+		m.hasLearningWindow = true
+	}
+
+	return m, nil
 }
 
 // CurrentMode returns the effective mode, accounting for session-aware override.
@@ -139,10 +161,25 @@ func (m *Manager) CanExecuteAutonomously() bool {
 
 // isLearningHours checks if current MYT time is in LEARNING window (00:00-08:00).
 func (m *Manager) isLearningHours() bool {
-	now := time.Now().In(m.location)
-	hour := now.Hour()
-	// LEARNING: 00:00 - 08:00 MYT
-	return hour >= 0 && hour < 8
+	if !m.hasLearningWindow {
+		return false
+	}
+
+	now := m.now()
+	minutes := now.Hour()*60 + now.Minute()
+	start := m.learningStartMins
+	end := m.learningEndMins
+
+	// Equal start/end means 24h learning window.
+	if start == end {
+		return true
+	}
+	// Normal same-day window (e.g., 00:00-08:00)
+	if start < end {
+		return minutes >= start && minutes < end
+	}
+	// Wrap-around window across midnight (e.g., 22:00-06:00)
+	return minutes >= start || minutes < end
 }
 
 // StatusText returns a formatted status string for Telegram.
@@ -168,4 +205,19 @@ func (m *Manager) StatusText() string {
 	default:
 		return effective.String()
 	}
+}
+
+func (m *Manager) now() time.Time {
+	if m.nowFn == nil {
+		return time.Now().In(m.location)
+	}
+	return m.nowFn().In(m.location)
+}
+
+func parseHHMMToMinutes(v string) (int, bool) {
+	parsed, err := time.Parse("15:04", strings.TrimSpace(v))
+	if err != nil {
+		return 0, false
+	}
+	return parsed.Hour()*60 + parsed.Minute(), true
 }

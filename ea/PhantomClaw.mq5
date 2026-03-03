@@ -10,6 +10,7 @@
 
 //--- Input parameters
 input string BridgeHost = "http://127.0.0.1:8765";  // Go agent REST endpoint
+input string BridgeAuthToken = "";                    // Optional token sent in X-Phantom-Bridge-Token
 input int    SignalIntervalSec = 60;                  // Seconds between signal pushes
 input int    RequestTimeoutMs  = 500;                 // Short timeout is fine (async ACK design)
 
@@ -130,6 +131,8 @@ string RequestAgent(string method, string endpoint, string payload)
 {
    string url = BridgeHost + endpoint;
    string headers = "Content-Type: application/json\r\n";
+   if(BridgeAuthToken != "")
+      headers += "X-Phantom-Bridge-Token: " + BridgeAuthToken + "\r\n";
    char   postData[];
    char   result[];
    string resultHeaders;

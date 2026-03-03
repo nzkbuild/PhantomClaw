@@ -346,3 +346,74 @@ func (db *DB) ExpirePendingDecisions(now time.Time) error {
 	)
 	return err
 }
+
+// --- Durable Cron Job Operations ---
+
+// CronJob is a persisted one-shot recheck job scheduled by cron_add.
+type CronJob struct {
+	JobID     string
+	Pair      string
+	Reason    string
+	WakeAt    time.Time
+	Status    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// UpsertCronJob inserts or updates a cron job and sets it to pending.
+func (db *DB) UpsertCronJob(jobID, pair, reason string, wakeAt time.Time) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO cron_jobs (job_id, pair, reason, wake_at, status, updated_at)
+		VALUES (?, ?, ?, ?, 'pending', datetime('now'))
+		ON CONFLICT(job_id) DO UPDATE SET
+			pair = excluded.pair,
+			reason = excluded.reason,
+			wake_at = excluded.wake_at,
+			status = 'pending',
+			updated_at = datetime('now')`,
+		jobID, pair, reason, wakeAt,
+	)
+	return err
+}
+
+// ListPendingCronJobs returns all pending cron jobs ordered by wake time.
+func (db *DB) ListPendingCronJobs() ([]CronJob, error) {
+	rows, err := db.conn.Query(`
+		SELECT job_id, pair, reason, wake_at, status, created_at, updated_at
+		FROM cron_jobs
+		WHERE status = 'pending'
+		ORDER BY wake_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []CronJob
+	for rows.Next() {
+		var job CronJob
+		if err := rows.Scan(
+			&job.JobID,
+			&job.Pair,
+			&job.Reason,
+			&job.WakeAt,
+			&job.Status,
+			&job.CreatedAt,
+			&job.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
+// MarkCronJobFired marks a pending cron job as fired.
+func (db *DB) MarkCronJobFired(jobID string) error {
+	_, err := db.conn.Exec(`
+		UPDATE cron_jobs
+		SET status = 'fired', updated_at = datetime('now')
+		WHERE job_id = ? AND status = 'pending'`,
+		jobID,
+	)
+	return err
+}

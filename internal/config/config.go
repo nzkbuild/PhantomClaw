@@ -14,6 +14,7 @@ type Config struct {
 	Telegram  TelegramConfig  `mapstructure:"telegram"`
 	LLM       LLMConfig       `mapstructure:"llm"`
 	Bridge    BridgeConfig    `mapstructure:"bridge"`
+	Market    MarketConfig    `mapstructure:"market"`
 	Risk      RiskConfig      `mapstructure:"risk"`
 	Sessions  SessionConfig   `mapstructure:"sessions"`
 	Memory    MemoryConfig    `mapstructure:"memory"`
@@ -59,8 +60,16 @@ type LLMProviderEntry struct {
 
 // BridgeConfig holds MT5 EA REST bridge settings.
 type BridgeConfig struct {
-	Host string `mapstructure:"host"`
-	Port int    `mapstructure:"port"`
+	Host      string `mapstructure:"host"`
+	Port      int    `mapstructure:"port"`
+	AuthToken string `mapstructure:"auth_token"`
+}
+
+// MarketConfig holds market-data behavior settings.
+type MarketConfig struct {
+	// FailPolicy controls behavior when market data cannot be fetched/parsed.
+	// Values: "fail_open" | "fail_closed"
+	FailPolicy string `mapstructure:"fail_policy"`
 }
 
 // RiskConfig holds hard-coded risk guardrails (PRD §10).
@@ -114,6 +123,8 @@ func Load(path string) (*Config, error) {
 
 	v.SetDefault("bridge.host", "127.0.0.1")
 	v.SetDefault("bridge.port", 8765)
+	v.SetDefault("bridge.auth_token", "")
+	v.SetDefault("market.fail_policy", "fail_open")
 
 	v.SetDefault("risk.max_lot_size", 0.10)
 	v.SetDefault("risk.max_daily_loss_usd", 100.0)
