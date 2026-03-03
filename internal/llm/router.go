@@ -19,6 +19,8 @@ type Router struct {
 
 	maxFailures    int           // consecutive failures before cooldown (default 3)
 	cooldownPeriod time.Duration // how long a cooled-down provider waits (default 5 min)
+	attemptTimeout time.Duration // max timeout budget for each provider attempt
+	stickyPrimary  bool          // when true, only primary provider is used
 }
 
 // RouterConfig holds configuration for the smart router.
@@ -27,6 +29,8 @@ type RouterConfig struct {
 	Aliases        map[string]string
 	MaxFailures    int           // default: 3
 	CooldownPeriod time.Duration // default: 5 min
+	AttemptTimeout time.Duration // default: 8s
+	StickyPrimary  bool          // when true, only primary is used; no auto fallback switching
 }
 
 // NewRouter creates a smart LLM router with error-aware fallback and cooldown.
@@ -39,6 +43,11 @@ func NewRouter(cfg RouterConfig) *Router {
 	if cooldown <= 0 {
 		cooldown = 5 * time.Minute
 	}
+	attemptTimeout := cfg.AttemptTimeout
+	if attemptTimeout <= 0 {
+		attemptTimeout = 8 * time.Second
+	}
+	stickyPrimary := cfg.StickyPrimary
 	aliases := cfg.Aliases
 	if aliases == nil {
 		aliases = make(map[string]string)
@@ -51,6 +60,8 @@ func NewRouter(cfg RouterConfig) *Router {
 		failures:       make(map[string]int),
 		maxFailures:    maxFail,
 		cooldownPeriod: cooldown,
+		attemptTimeout: attemptTimeout,
+		stickyPrimary:  stickyPrimary,
 	}
 }
 
@@ -77,16 +88,22 @@ func (r *Router) Resolve(alias string) string {
 func (r *Router) Chat(ctx context.Context, messages []Message) (string, error) {
 	r.mu.RLock()
 	providers := r.providers
+	stickyPrimary := r.stickyPrimary
 	r.mu.RUnlock()
+	if stickyPrimary && len(providers) > 1 {
+		providers = providers[:1]
+	}
 
 	var lastErr error
-	for _, p := range providers {
+	for i, p := range providers {
 		if r.isCoolingDown(p.Name()) {
 			log.Printf("llm/router: %s is cooling down, skipping", p.Name())
 			continue
 		}
 
-		result, err := p.Chat(ctx, messages)
+		attemptCtx, cancel := r.contextForAttempt(ctx, len(providers)-i)
+		result, err := p.Chat(attemptCtx, messages)
+		cancel()
 		if err == nil {
 			r.recordSuccess(p.Name())
 			return result, nil
@@ -106,15 +123,22 @@ func (r *Router) Chat(ctx context.Context, messages []Message) (string, error) {
 func (r *Router) StreamChat(ctx context.Context, messages []Message, callback StreamCallback) error {
 	r.mu.RLock()
 	providers := r.providers
+	stickyPrimary := r.stickyPrimary
 	r.mu.RUnlock()
+	if stickyPrimary && len(providers) > 1 {
+		providers = providers[:1]
+	}
 
 	var lastErr error
-	for _, p := range providers {
+	for i, p := range providers {
 		if r.isCoolingDown(p.Name()) {
 			continue
 		}
 
-		if err := p.StreamChat(ctx, messages, callback); err == nil {
+		attemptCtx, cancel := r.contextForAttempt(ctx, len(providers)-i)
+		err := p.StreamChat(attemptCtx, messages, callback)
+		cancel()
+		if err == nil {
 			r.recordSuccess(p.Name())
 			return nil
 		} else {
@@ -133,15 +157,21 @@ func (r *Router) StreamChat(ctx context.Context, messages []Message, callback St
 func (r *Router) ToolCall(ctx context.Context, messages []Message, tools []Tool) (*ToolResult, error) {
 	r.mu.RLock()
 	providers := r.providers
+	stickyPrimary := r.stickyPrimary
 	r.mu.RUnlock()
+	if stickyPrimary && len(providers) > 1 {
+		providers = providers[:1]
+	}
 
 	var lastErr error
-	for _, p := range providers {
+	for i, p := range providers {
 		if r.isCoolingDown(p.Name()) {
 			continue
 		}
 
-		result, err := p.ToolCall(ctx, messages, tools)
+		attemptCtx, cancel := r.contextForAttempt(ctx, len(providers)-i)
+		result, err := p.ToolCall(attemptCtx, messages, tools)
+		cancel()
 		if err == nil {
 			r.recordSuccess(p.Name())
 			return result, nil
@@ -171,6 +201,9 @@ func (r *Router) SetPrimary(p Provider) {
 	}
 	// Prepend as primary
 	r.providers = append([]Provider{p}, r.providers...)
+	// Newly selected primary should start clean.
+	r.failures[p.Name()] = 0
+	delete(r.cooldowns, p.Name())
 }
 
 // ProviderStatus returns the status of all registered providers.
@@ -200,6 +233,12 @@ func (r *Router) handleFailure(provider string, err error) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.stickyPrimary && len(r.providers) > 0 && r.providers[0].Name() == provider {
+		r.failures[provider]++
+		log.Printf("llm/router: %s error (sticky primary, failure %d): %v", provider, r.failures[provider], err)
+		return
+	}
 
 	r.failures[provider]++
 	count := r.failures[provider]
@@ -249,6 +288,10 @@ func (r *Router) isCoolingDown(provider string) bool {
 }
 
 func (r *Router) isCoolingDownLocked(provider string) bool {
+	if r.stickyPrimary && len(r.providers) > 0 && r.providers[0].Name() == provider {
+		return false
+	}
+
 	expiry, ok := r.cooldowns[provider]
 	if !ok {
 		return false
@@ -259,4 +302,36 @@ func (r *Router) isCoolingDownLocked(provider string) bool {
 		return false
 	}
 	return true
+}
+
+func (r *Router) contextForAttempt(parent context.Context, attemptsLeft int) (context.Context, context.CancelFunc) {
+	if attemptsLeft <= 0 {
+		attemptsLeft = 1
+	}
+
+	timeout := r.attemptTimeout
+	if deadline, ok := parent.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return context.WithCancel(parent)
+		}
+
+		// Slice remaining parent budget so one slow provider does not starve fallbacks.
+		slice := remaining / time.Duration(attemptsLeft)
+		if slice <= 0 {
+			slice = remaining
+		}
+
+		if timeout <= 0 || timeout > slice {
+			timeout = slice
+		}
+		if timeout > remaining {
+			timeout = remaining
+		}
+	}
+
+	if timeout > 0 {
+		return context.WithTimeout(parent, timeout)
+	}
+	return context.WithCancel(parent)
 }

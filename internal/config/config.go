@@ -44,9 +44,10 @@ type TelegramConfig struct {
 
 // LLMConfig holds LLM provider configuration.
 type LLMConfig struct {
-	Primary   string             `mapstructure:"primary"`   // provider name or alias
-	Providers []LLMProviderEntry `mapstructure:"providers"` // ordered list of providers
-	Aliases   map[string]string  `mapstructure:"aliases"`   // "fast" → "groq"
+	Primary       string             `mapstructure:"primary"`        // provider name or alias
+	StickyPrimary bool               `mapstructure:"sticky_primary"` // lock to primary provider unless changed by user
+	Providers     []LLMProviderEntry `mapstructure:"providers"`      // ordered list of providers
+	Aliases       map[string]string  `mapstructure:"aliases"`        // "fast" → "groq"
 }
 
 // LLMProviderEntry holds config for a single LLM provider.
@@ -69,7 +70,7 @@ type BridgeConfig struct {
 // SignalTimeoutDuration returns the configured bridge signal timeout.
 func (b BridgeConfig) SignalTimeoutDuration() time.Duration {
 	if b.SignalTimeoutMs <= 0 {
-		return 10 * time.Second
+		return 30 * time.Second
 	}
 	return time.Duration(b.SignalTimeoutMs) * time.Millisecond
 }
@@ -133,7 +134,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("bridge.host", "127.0.0.1")
 	v.SetDefault("bridge.port", 8765)
 	v.SetDefault("bridge.auth_token", "")
-	v.SetDefault("bridge.signal_timeout_ms", 10000)
+	v.SetDefault("bridge.signal_timeout_ms", 30000)
 	v.SetDefault("market.fail_policy", "fail_open")
 
 	v.SetDefault("risk.max_lot_size", 0.10)
@@ -160,6 +161,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("heartbeat.interval_min", 5)
 
 	v.SetDefault("llm.primary", "claude")
+	v.SetDefault("llm.sticky_primary", true)
 
 	v.SetDefault("pairs", []string{"XAUUSD", "EURUSD", "USDJPY", "GBPUSD"})
 

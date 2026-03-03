@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -169,6 +170,8 @@ func main() {
 	}
 	defer zapLogger.Sync()
 	zap.ReplaceGlobals(zapLogger)
+	restoreStdLog := zap.RedirectStdLog(zapLogger)
+	defer restoreStdLog()
 	logger := zapLogger.Sugar()
 	logger.Infow("config loaded", "mode", cfg.Bot.Mode, "tz", cfg.Bot.Timezone, "pairs", cfg.Pairs)
 
@@ -214,6 +217,10 @@ func main() {
 	// --- Error recovery ---
 	recovery := health.NewRecovery(func(component, action string) {
 		logger.Warnw("recovery: action triggered", "component", component, "action", action)
+		if action == "switch_provider" && cfg.LLM.StickyPrimary {
+			logger.Infow("recovery: switch_provider ignored (sticky primary enabled)", "component", component)
+			return
+		}
 		if action == "halt" {
 			safetyMgr.SetMode(safety.ModeHalt)
 		}
@@ -230,10 +237,11 @@ func main() {
 
 	// --- LLM providers + router (config-driven) ---
 	var providers []llm.Provider
+	providerByName := map[string]llm.Provider{}
 
 	for _, entry := range cfg.LLM.Providers {
-		if entry.APIKey == "" && entry.Type != "openai_compat" {
-			continue // skip unconfigured providers (except ollama which may not need a key)
+		if shouldSkipProvider(entry, logger) {
+			continue
 		}
 
 		var p llm.Provider
@@ -265,11 +273,14 @@ func main() {
 			continue
 		}
 		providers = append(providers, p)
+		providerByName[p.Name()] = p
+		providerByName[strings.ToLower(p.Name())] = p
 		logger.Infow("llm: provider ready", "name", entry.Name, "type", entry.Type, "model", entry.Model)
 	}
 
 	// Build smart router with error-aware fallback + aliases
 	var llmProvider llm.Provider
+	var llmRouter *llm.Router
 	if len(providers) > 0 {
 		// Reorder: put primary first
 		primaryName := cfg.LLM.Primary
@@ -279,15 +290,17 @@ func main() {
 		}
 		ordered := reorderProviders(providers, primaryName)
 
-		llmRouter := llm.NewRouter(llm.RouterConfig{
-			Providers: ordered,
-			Aliases:   cfg.LLM.Aliases,
+		llmRouter = llm.NewRouter(llm.RouterConfig{
+			Providers:     ordered,
+			Aliases:       cfg.LLM.Aliases,
+			StickyPrimary: cfg.LLM.StickyPrimary,
 		})
 		llmProvider = llmRouter
 		logger.Infow("llm: router initialized",
 			"primary", ordered[0].Name(),
 			"total", len(ordered),
 			"aliases", cfg.LLM.Aliases,
+			"sticky_primary", cfg.LLM.StickyPrimary,
 		)
 	} else {
 		logger.Warn("llm: NO providers configured — agent brain disabled")
@@ -377,7 +390,6 @@ func main() {
 		})
 		heartbeat.Start()
 		defer heartbeat.Stop()
-		logger.Infow("heartbeat: started", "interval_min", cfg.Heartbeat.IntervalMin)
 	}
 
 	// --- Agent brain ---
@@ -459,6 +471,43 @@ func main() {
 	// --- Telegram bot ---
 	var tgBot *telegram.Bot
 	if cfg.Telegram.Token != "" {
+		llmCurrent := func() string { return "" }
+		llmSwitch := func(string) (string, error) {
+			return "", fmt.Errorf("llm router not configured")
+		}
+		llmStatus := func() map[string]string { return nil }
+		if llmRouter != nil {
+			llmCurrent = func() string {
+				return strings.TrimPrefix(llmRouter.Name(), "router:")
+			}
+			llmStatus = llmRouter.ProviderStatus
+			llmSwitch = func(target string) (string, error) {
+				requested := strings.TrimSpace(target)
+				if requested == "" {
+					return "", fmt.Errorf("provider name or alias is required")
+				}
+				resolved := llmRouter.Resolve(requested)
+				provider, ok := providerByName[resolved]
+				if !ok {
+					provider, ok = providerByName[strings.ToLower(resolved)]
+				}
+				if !ok {
+					known := make([]string, 0, len(providerByName))
+					seen := map[string]struct{}{}
+					for _, p := range providers {
+						if _, exists := seen[p.Name()]; exists {
+							continue
+						}
+						seen[p.Name()] = struct{}{}
+						known = append(known, p.Name())
+					}
+					return "", fmt.Errorf("unknown provider/alias '%s' (resolved: '%s'). available: %s", requested, resolved, strings.Join(known, ", "))
+				}
+				llmRouter.SetPrimary(provider)
+				return strings.TrimPrefix(llmRouter.Name(), "router:"), nil
+			}
+		}
+
 		tgBot, err = telegram.New(cfg.Telegram.Token, cfg.Telegram.ChatID, telegram.Dependencies{
 			Safety:      safetyMgr,
 			Risk:        riskEngine,
@@ -469,6 +518,10 @@ func main() {
 			Chat:        brain,
 			BridgeProbe: makeBridgeProbe(bridgeURL, bridgeAuthToken),
 			Diag:        makeRuntimeDiag(bridgeURL, bridgeAuthToken, len(providers), db),
+			LLMCurrent:  llmCurrent,
+			LLMSwitch:   llmSwitch,
+			LLMStatus:   llmStatus,
+			LLMSticky:   cfg.LLM.StickyPrimary,
 		})
 		if err != nil {
 			logger.Fatalf("telegram: %v", err)
@@ -576,4 +629,54 @@ func reorderProviders(providers []llm.Provider, primaryName string) []llm.Provid
 		return append([]llm.Provider{primary}, rest...)
 	}
 	return providers // primary not found, keep original order
+}
+
+func shouldSkipProvider(entry config.LLMProviderEntry, logger *zap.SugaredLogger) bool {
+	if strings.TrimSpace(entry.Name) == "" {
+		logger.Warnw("llm: skipping provider (missing name)", "type", entry.Type)
+		return true
+	}
+
+	if strings.TrimSpace(entry.Model) == "" {
+		logger.Warnw("llm: skipping provider (missing model)", "name", entry.Name)
+		return true
+	}
+
+	apiKey := strings.TrimSpace(entry.APIKey)
+	switch entry.Type {
+	case "openai_compat":
+		baseURL := strings.TrimSpace(entry.BaseURL)
+		if baseURL == "" {
+			logger.Warnw("llm: skipping provider (no base_url)", "name", entry.Name)
+			return true
+		}
+		// Allow keyless local providers (e.g. Ollama), but require key for remote APIs.
+		if apiKey == "" && !isLocalProviderEndpoint(baseURL) {
+			logger.Warnw("llm: skipping provider (missing api_key for remote endpoint)", "name", entry.Name, "base_url", baseURL)
+			return true
+		}
+		return false
+	case "claude", "openai":
+		if apiKey == "" {
+			logger.Warnw("llm: skipping provider (missing api_key)", "name", entry.Name, "type", entry.Type)
+			return true
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func isLocalProviderEndpoint(baseURL string) bool {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return strings.HasSuffix(host, ".local")
+	}
 }

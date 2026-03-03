@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,10 @@ type Dependencies struct {
 	Chat        ChatResponder
 	BridgeProbe BridgeProbeFunc
 	Diag        RuntimeDiagFunc
+	LLMCurrent  func() string
+	LLMSwitch   func(target string) (string, error)
+	LLMStatus   func() map[string]string
+	LLMSticky   bool
 }
 
 // ChatResponder handles free-form chat messages when chat mode is enabled.
@@ -98,6 +103,7 @@ func New(token string, chatID int64, deps Dependencies) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/pairs", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handlePairs))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/pending", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handlePending))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/confidence", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleConfidence))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/provider", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleProvider))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/config", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleConfig))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/rollback", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleRollback))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/chat", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleChatMode))
@@ -409,6 +415,58 @@ func (tb *Bot) handleConfig(ctx context.Context, b *bot.Bot, update *models.Upda
 	tb.sendReply(ctx, b, update.Message.Chat.ID, msg, true)
 }
 
+func (tb *Bot) handleProvider(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/provider", update)
+	if tb.deps.LLMCurrent == nil {
+		tb.sendReply(ctx, b, update.Message.Chat.ID, "❌ Provider control unavailable: LLM router not configured.", false)
+		return
+	}
+
+	parts := strings.Fields(update.Message.Text)
+	if len(parts) < 2 || strings.EqualFold(parts[1], "status") {
+		current := tb.deps.LLMCurrent()
+		if strings.TrimSpace(current) == "" {
+			current = "unknown"
+		}
+
+		var sb strings.Builder
+		sb.WriteString("LLM Provider\n\n")
+		sb.WriteString(fmt.Sprintf("Current: %s\n", current))
+		sb.WriteString(fmt.Sprintf("Sticky primary: %t\n", tb.deps.LLMSticky))
+
+		if tb.deps.LLMStatus != nil {
+			status := tb.deps.LLMStatus()
+			if len(status) > 0 {
+				keys := make([]string, 0, len(status))
+				for k := range status {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				sb.WriteString("\nProviders:\n")
+				for _, k := range keys {
+					sb.WriteString(fmt.Sprintf("- %s: %s\n", k, status[k]))
+				}
+			}
+		}
+		sb.WriteString("\nUsage: /provider <name_or_alias>")
+		tb.sendReply(ctx, b, update.Message.Chat.ID, sb.String(), false)
+		return
+	}
+
+	if tb.deps.LLMSwitch == nil {
+		tb.sendReply(ctx, b, update.Message.Chat.ID, "❌ Provider switching unavailable in current runtime.", false)
+		return
+	}
+
+	active, err := tb.deps.LLMSwitch(parts[1])
+	if err != nil {
+		tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("❌ Provider switch failed: %v", err), false)
+		return
+	}
+
+	tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("✅ LLM provider switched. Active provider: %s", active), false)
+}
+
 func (tb *Bot) handleRollback(ctx context.Context, b *bot.Bot, update *models.Update) {
 	logInbound("/rollback", update)
 	if tb.deps.Strategy == nil {
@@ -454,6 +512,7 @@ func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update
 		"`/mode observe|suggest|auto|halt` — Switch mode\n" +
 		"`/auto` `/observe` `/suggest` — Quick mode aliases\n" +
 		"`/halt` — Emergency stop\n" +
+		"`/provider [status|name]` — Show or switch LLM provider\n" +
 		"`/report` — Daily summary + diary\n" +
 		"`/pairs` — Active pairs + bias\n" +
 		"`/pending` — Pending orders (check MT5)\n" +
