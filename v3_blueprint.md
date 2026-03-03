@@ -12,7 +12,7 @@ Progress source of truth (done/next): `docs/plans/2026-03-02-v3-foundation.md`
 
 ---
 
-## Current Status (2026-03-02)
+## Current Status (2026-03-03)
 
 - Phase A reliability scope is completed.
 - Implemented in code: issues `#2 #3 #4 #5 #6 #7 #8 #9 #10 #11 #12 #13 #14 #17 #18 #19 #20 #21 #22 #23 #25 #27`.
@@ -175,11 +175,11 @@ TARGET (v3):
 - Telegram commands accepted only from authorized chat/user
 
 ### Phase B — P1 Safety + Determinism
-- [ ] Implement issues #11, #12 (timezone/session correctness)
-- [ ] Implement issues #18, #19, #20 (market cache + fail policy)
-- [ ] Implement issue #21 (durable cron jobs)
-- [ ] Implement issue #22 (deterministic tool ordering)
-- [ ] Implement issues #7, #25, #27 (ops correctness)
+- [x] Implement issues #11, #12 (timezone/session correctness)
+- [x] Implement issues #18, #19, #20 (market cache + fail policy)
+- [x] Implement issue #21 (durable cron jobs)
+- [x] Implement issue #22 (deterministic tool ordering)
+- [x] Implement issues #7, #25, #27 (ops correctness)
 
 **Exit criteria:**
 - Deterministic prompt/tool order across restarts

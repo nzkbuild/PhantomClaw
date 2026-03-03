@@ -32,7 +32,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var version = "1.0.0"
+var version = "2.0.0"
 
 type alertSender interface {
 	Send(ctx context.Context, text string)
