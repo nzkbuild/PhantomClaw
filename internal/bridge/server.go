@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -109,6 +110,21 @@ type AccountSnapshot struct {
 	Timestamp     string  `json:"timestamp"`
 }
 
+// LogQuery controls bridge log export filtering.
+type LogQuery struct {
+	Level     string
+	Component string
+	Contains  string
+	Since     time.Time
+	Limit     int
+}
+
+// DiagnosticsProvider returns component-level runtime diagnostics.
+type DiagnosticsProvider func(ctx context.Context) (map[string]any, error)
+
+// LogProvider returns filtered structured log rows.
+type LogProvider func(ctx context.Context, query LogQuery) ([]map[string]any, error)
+
 // Server is the HTTP REST bridge between PhantomClaw and MT5 EA.
 type Server struct {
 	host           string
@@ -119,6 +135,8 @@ type Server struct {
 	db             *memory.DB
 	authToken      string
 	modelsProvider func() any
+	diagnostics    DiagnosticsProvider
+	logProvider    LogProvider
 
 	mu               sync.RWMutex
 	latestBySymbol   map[string]SignalRequest
@@ -153,10 +171,13 @@ func NewServer(host string, port int, onSignal SignalHandler, onTradeResult Trad
 	mux.HandleFunc("POST /decision/consume", s.handleDecisionConsume)
 	mux.HandleFunc("POST /trade-result", s.handleTradeResult)
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /health/diagnostics", s.handleDiagnostics)
 	mux.HandleFunc("GET /models", s.handleModels)
 	mux.HandleFunc("GET /price", s.handlePrice)
 	mux.HandleFunc("GET /account", s.handleAccount)
+	mux.HandleFunc("GET /admin/decisions", s.handleAdminDecisions)
 	mux.HandleFunc("GET /admin/jobs", s.handleAdminJobs)
+	mux.HandleFunc("GET /admin/logs", s.handleAdminLogs)
 	mux.HandleFunc("GET /admin/queue", s.handleAdminQueue)
 
 	s.server = &http.Server{
@@ -203,6 +224,20 @@ func (s *Server) SetModelsProvider(provider func() any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.modelsProvider = provider
+}
+
+// SetDiagnosticsProvider wires callback for rich component diagnostics.
+func (s *Server) SetDiagnosticsProvider(provider DiagnosticsProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.diagnostics = provider
+}
+
+// SetLogProvider wires callback for structured log export.
+func (s *Server) SetLogProvider(provider LogProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logProvider = provider
 }
 
 // handleSignal processes POST /signal from EA.
@@ -547,6 +582,43 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
+// handleDiagnostics returns rich component-level diagnostics.
+func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if !s.requireCompatibleContract(w, r) {
+		return
+	}
+
+	out := map[string]any{
+		"status":   "ok",
+		"service":  "phantomclaw",
+		"version":  serviceVersion,
+		"contract": contractVersion,
+		"ts":       time.Now().UTC(),
+	}
+
+	s.mu.RLock()
+	provider := s.diagnostics
+	s.mu.RUnlock()
+
+	if provider != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		components, err := provider(ctx)
+		if err != nil {
+			out["components_error"] = err.Error()
+		} else {
+			out["components"] = components
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
 // handleModels returns runtime model/provider inventory.
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	s.setProtocolHeaders(w)
@@ -643,6 +715,75 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+func (s *Server) handleAdminDecisions(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if s.db == nil {
+		http.Error(w, `{"error":"memory db unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	limit := parsePositiveInt(r.URL.Query().Get("limit"), 200, 2000)
+	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
+
+	decisions, err := s.db.ListDecisionHistory(limit, symbol)
+	if err != nil {
+		http.Error(w, `{"error":"failed to list decisions"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"count":     len(decisions),
+		"symbol":    symbol,
+		"decisions": decisions,
+	})
+}
+
+func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if !s.requireCompatibleContract(w, r) {
+		return
+	}
+
+	s.mu.RLock()
+	provider := s.logProvider
+	s.mu.RUnlock()
+	if provider == nil {
+		http.Error(w, `{"error":"log provider unavailable"}`, http.StatusNotImplemented)
+		return
+	}
+
+	query := LogQuery{
+		Level:     strings.ToLower(strings.TrimSpace(r.URL.Query().Get("level"))),
+		Component: strings.ToLower(strings.TrimSpace(r.URL.Query().Get("component"))),
+		Contains:  strings.TrimSpace(r.URL.Query().Get("contains")),
+		Limit:     parsePositiveInt(r.URL.Query().Get("limit"), 200, 5000),
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("since")); raw != "" {
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+			query.Since = parsed
+		}
+	}
+
+	rows, err := provider(r.Context(), query)
+	if err != nil {
+		http.Error(w, `{"error":"failed to read logs"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"count": len(rows),
+		"logs":  rows,
+	})
 }
 
 func (s *Server) handleAdminJobs(w http.ResponseWriter, r *http.Request) {
@@ -744,4 +885,15 @@ func contractMajor(v string) string {
 	}
 	parts := strings.SplitN(v, ".", 2)
 	return parts[0]
+}
+
+func parsePositiveInt(raw string, fallback int, max int) int {
+	value := fallback
+	if parsed, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && parsed > 0 {
+		value = parsed
+	}
+	if max > 0 && value > max {
+		return max
+	}
+	return value
 }

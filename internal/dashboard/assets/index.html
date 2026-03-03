@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PhantomClaw Control Deck</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #091017;
+      --panel: #0f1e2c;
+      --panel-alt: #13283b;
+      --text: #e8f0f7;
+      --muted: #8ea2b5;
+      --ok: #42d58c;
+      --warn: #ffcb6a;
+      --bad: #ff7676;
+      --edge: #2f455c;
+      --accent: #47d3ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Space Grotesk", "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 10% 10%, #17314a 0, #091017 45%),
+        linear-gradient(160deg, #0a141f 0%, #0f1e2c 100%);
+      min-height: 100vh;
+    }
+    .wrap { padding: 20px; max-width: 1400px; margin: 0 auto; }
+    .head {
+      display: flex; justify-content: space-between; align-items: flex-end; gap: 16px;
+      margin-bottom: 16px;
+    }
+    .title { margin: 0; font-size: 30px; letter-spacing: .02em; }
+    .sub { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+    .stamp { font-family: "IBM Plex Mono", monospace; color: var(--accent); font-size: 13px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+    }
+    .card {
+      background: linear-gradient(180deg, var(--panel) 0%, var(--panel-alt) 100%);
+      border: 1px solid var(--edge);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 4px 20px rgba(0,0,0,.24);
+      overflow: hidden;
+    }
+    .kpi { grid-column: span 3; }
+    .wide { grid-column: span 8; }
+    .side { grid-column: span 4; }
+    .full { grid-column: span 12; }
+    h2 { margin: 0 0 10px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+    .metric { font-size: 28px; font-weight: 700; }
+    .mono { font-family: "IBM Plex Mono", monospace; }
+    .ok { color: var(--ok); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    .table {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+    }
+    .table th, .table td {
+      border-bottom: 1px solid #22374a; padding: 7px 6px; text-align: left;
+      max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .table th { color: var(--muted); font-weight: 500; }
+    .toolbar { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+    input, select {
+      background: #0a1622; color: var(--text); border: 1px solid #274058;
+      border-radius: 8px; padding: 7px 10px; font-size: 12px;
+    }
+    .logbox {
+      max-height: 320px; overflow: auto; border: 1px solid #22384b; border-radius: 10px;
+      background: #0b1825; padding: 8px; font-family: "IBM Plex Mono", monospace; font-size: 12px;
+    }
+    .logline { border-bottom: 1px dashed #1d3245; padding: 4px 0; }
+    @media (max-width: 980px) {
+      .kpi, .wide, .side { grid-column: span 12; }
+      .title { font-size: 25px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="head">
+      <div>
+        <h1 class="title">PhantomClaw Control Deck</h1>
+        <p class="sub">Live oversight for equity, risk posture, decisions, sessions, diagnostics, and logs.</p>
+      </div>
+      <div id="stamp" class="stamp">syncing...</div>
+    </header>
+
+    <section class="grid">
+      <article class="card kpi"><h2>Mode</h2><div id="mode" class="metric">-</div></article>
+      <article class="card kpi"><h2>Session</h2><div id="session" class="metric">-</div></article>
+      <article class="card kpi"><h2>Open Positions</h2><div id="openPos" class="metric">-</div></article>
+      <article class="card kpi"><h2>Daily Loss</h2><div id="dailyLoss" class="metric">-</div></article>
+
+      <article class="card wide">
+        <h2>Decision History</h2>
+        <div class="toolbar">
+          <input id="symbolFilter" placeholder="Symbol filter e.g. XAUUSD" />
+        </div>
+        <table class="table">
+          <thead><tr><th>Updated</th><th>Req ID</th><th>Symbol</th><th>Decision</th><th>Status</th><th>Reason</th></tr></thead>
+          <tbody id="decisionRows"></tbody>
+        </table>
+      </article>
+
+      <article class="card side">
+        <h2>Session Turns</h2>
+        <table class="table">
+          <thead><tr><th>Time</th><th>Pair</th><th>Role</th><th>Decision</th></tr></thead>
+          <tbody id="sessionRows"></tbody>
+        </table>
+      </article>
+
+      <article class="card full">
+        <h2>Diagnostics</h2>
+        <div id="diagnostics" class="mono" style="font-size:12px; white-space:pre-wrap;"></div>
+      </article>
+
+      <article class="card full">
+        <h2>Logs</h2>
+        <div class="toolbar">
+          <select id="logLevel">
+            <option value="">all levels</option>
+            <option value="debug">debug</option>
+            <option value="info">info</option>
+            <option value="warn">warn</option>
+            <option value="error">error</option>
+          </select>
+          <input id="logComponent" placeholder="component (caller contains)" />
+          <input id="logContains" placeholder="message contains" />
+        </div>
+        <div id="logs" class="logbox"></div>
+      </article>
+    </section>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let lastLogTs = "";
+    let pollTimer = null;
+
+    function esc(v) {
+      return String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    }
+
+    async function getJSON(url) {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+      return res.json();
+    }
+
+    function setStamp() {
+      $("stamp").textContent = `last sync ${new Date().toLocaleTimeString()}`;
+    }
+
+    function renderSnapshot(data) {
+      $("mode").textContent = data.mode ?? "-";
+      $("session").textContent = data.session ?? "-";
+      $("openPos").textContent = `${data.open_positions ?? 0}/${data.max_positions ?? 0}`;
+      $("dailyLoss").textContent = `$${Number(data.daily_loss ?? 0).toFixed(2)}`;
+      const risk = Number(data.daily_loss ?? 0);
+      $("dailyLoss").className = `metric ${risk > 80 ? "bad" : risk > 40 ? "warn" : "ok"}`;
+    }
+
+    function renderDecisions(rows) {
+      $("decisionRows").innerHTML = rows.map(r => `
+        <tr>
+          <td>${esc(r.updated_at)}</td>
+          <td class="mono">${esc(r.request_id)}</td>
+          <td>${esc(r.symbol)}</td>
+          <td>${esc(r.decision || "-")}</td>
+          <td>${esc(r.status)}</td>
+          <td>${esc(r.reason || "-")}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderSessions(rows) {
+      $("sessionRows").innerHTML = rows.map(t => `
+        <tr>
+          <td class="mono">${esc(t.ts || t.timestamp || "-")}</td>
+          <td>${esc(t.pair || "-")}</td>
+          <td>${esc(t.role || "-")}</td>
+          <td>${esc(t.decision || "-")}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderDiagnostics(data) {
+      $("diagnostics").textContent = JSON.stringify(data, null, 2);
+    }
+
+    function renderLogs(rows) {
+      if (!Array.isArray(rows)) return;
+      if (rows.length === 0) return;
+      lastLogTs = rows[rows.length - 1]?.ts || lastLogTs;
+      $("logs").innerHTML = rows.map((l) => `
+        <div class="logline">
+          <span class="mono">${esc(l.ts || "-")}</span>
+          <span class="mono ${esc(l.level || "")}"> ${esc(l.level || "info")} </span>
+          <span>${esc(l.msg || "")}</span>
+          <span class="mono" style="color:#8ea2b5"> ${esc(l.caller || "")}</span>
+        </div>
+      `).join("") + $("logs").innerHTML;
+      const lines = $("logs").querySelectorAll(".logline");
+      for (let i = 200; i < lines.length; i++) lines[i].remove();
+    }
+
+    async function refreshAll() {
+      try {
+        const symbol = $("symbolFilter").value.trim().toUpperCase();
+        const [snap, decisions, sessions, diagnostics] = await Promise.all([
+          getJSON("/api/snapshot"),
+          getJSON(`/api/decisions?limit=120${symbol ? `&symbol=${encodeURIComponent(symbol)}` : ""}`),
+          getJSON("/api/sessions?limit=80"),
+          getJSON("/api/diagnostics"),
+        ]);
+        renderSnapshot(snap);
+        renderDecisions(decisions.decisions || []);
+        renderSessions(sessions.turns || []);
+        renderDiagnostics(diagnostics);
+
+        const lvl = $("logLevel").value;
+        const comp = $("logComponent").value.trim();
+        const contains = $("logContains").value.trim();
+        const q = new URLSearchParams({ limit: "120" });
+        if (lvl) q.set("level", lvl);
+        if (comp) q.set("component", comp);
+        if (contains) q.set("contains", contains);
+        if (lastLogTs) q.set("since", lastLogTs);
+        const logs = await getJSON(`/api/logs?${q.toString()}`);
+        renderLogs(logs.logs || []);
+        setStamp();
+      } catch (err) {
+        $("stamp").textContent = `sync error: ${err.message}`;
+      }
+    }
+
+    function start() {
+      $("symbolFilter").addEventListener("change", () => { lastLogTs = ""; refreshAll(); });
+      ["logLevel", "logComponent", "logContains"].forEach(id => {
+        $(id).addEventListener("change", () => { lastLogTs = ""; $("logs").innerHTML = ""; refreshAll(); });
+      });
+      refreshAll();
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(refreshAll, 3000);
+    }
+    start();
+  </script>
+</body>
+</html>

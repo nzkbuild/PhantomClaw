@@ -457,6 +457,85 @@ func TestBridgeModelsEndpoint(t *testing.T) {
 	}
 }
 
+func TestBridgeDiagnosticsEndpoint(t *testing.T) {
+	s := NewServer("127.0.0.1", 0, nil, nil, nil, "bridge-secret")
+	s.SetDiagnosticsProvider(func(ctx context.Context) (map[string]any, error) {
+		return map[string]any{
+			"bridge": map[string]any{"status": "ok"},
+			"db":     map[string]any{"status": "ok"},
+		}, nil
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health/diagnostics", nil)
+	req.Header.Set(bridgeAuthHeader, "bridge-secret")
+	s.handleDiagnostics(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("diagnostics status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode diagnostics: %v", err)
+	}
+	if payload["status"] != "ok" {
+		t.Fatalf("unexpected diagnostics payload: %+v", payload)
+	}
+}
+
+func TestBridgeAdminDecisionsEndpoint(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "bridge-admin.db")
+	db, err := memory.NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.UpsertPendingDecision("req-admin", "EURUSD", `{"action":"HOLD","reason":"test"}`, time.Now().Add(5*time.Minute)); err != nil {
+		t.Fatalf("UpsertPendingDecision: %v", err)
+	}
+
+	s := NewServer("127.0.0.1", 0, nil, nil, db, "bridge-secret")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/decisions?limit=10&symbol=EURUSD", nil)
+	req.Header.Set(bridgeAuthHeader, "bridge-secret")
+	s.handleAdminDecisions(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin decisions status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode decisions: %v", err)
+	}
+	if payload["count"].(float64) < 1 {
+		t.Fatalf("expected at least one decision row: %+v", payload)
+	}
+}
+
+func TestBridgeAdminLogsEndpoint(t *testing.T) {
+	s := NewServer("127.0.0.1", 0, nil, nil, nil, "bridge-secret")
+	s.SetLogProvider(func(ctx context.Context, query LogQuery) ([]map[string]any, error) {
+		return []map[string]any{
+			{"ts": time.Now().UTC().Format(time.RFC3339), "level": "info", "msg": "hello"},
+		}, nil
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/logs?limit=5&level=info", nil)
+	req.Header.Set(bridgeAuthHeader, "bridge-secret")
+	s.handleAdminLogs(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin logs status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode logs: %v", err)
+	}
+	if payload["count"].(float64) != 1 {
+		t.Fatalf("expected one log row: %+v", payload)
+	}
+}
+
 func TestBridgeAuthAllowsAuthorizedRequests(t *testing.T) {
 	s := NewServer("127.0.0.1", 0, func(ctx context.Context, req *SignalRequest) *SignalResponse {
 		return &SignalResponse{

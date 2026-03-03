@@ -2,6 +2,7 @@ package memory
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -456,6 +457,9 @@ type PendingDecisionRecord struct {
 	RequestID string    `json:"request_id"`
 	Symbol    string    `json:"symbol"`
 	Status    string    `json:"status"`
+	Decision  string    `json:"decision,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
@@ -486,4 +490,134 @@ func (db *DB) ListActivePendingDecisions(limit int) ([]PendingDecisionRecord, er
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+// DecisionHistoryRecord is a dashboard-friendly decision history item.
+type DecisionHistoryRecord struct {
+	RequestID string    `json:"request_id"`
+	Symbol    string    `json:"symbol"`
+	Status    string    `json:"status"`
+	Decision  string    `json:"decision,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// ListDecisionHistory returns latest decisions (including consumed/expired) for history browsing.
+func (db *DB) ListDecisionHistory(limit int, symbol string) ([]DecisionHistoryRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	args := []any{}
+	query := `
+		SELECT request_id, symbol, status, decision_json, created_at, updated_at, expires_at
+		FROM pending_decisions`
+	if symbol != "" {
+		query += " WHERE symbol = ?"
+		args = append(args, symbol)
+	}
+	query += " ORDER BY updated_at DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []DecisionHistoryRecord
+	for rows.Next() {
+		var (
+			entry   DecisionHistoryRecord
+			payload string
+		)
+		if err := rows.Scan(
+			&entry.RequestID,
+			&entry.Symbol,
+			&entry.Status,
+			&payload,
+			&entry.CreatedAt,
+			&entry.UpdatedAt,
+			&entry.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+
+		var parsed struct {
+			Action string `json:"action"`
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal([]byte(payload), &parsed); err == nil {
+			entry.Decision = parsed.Action
+			entry.Reason = parsed.Reason
+		}
+		out = append(out, entry)
+	}
+	return out, rows.Err()
+}
+
+// TradeSummary is an aggregate metrics snapshot for dashboard reporting.
+type TradeSummary struct {
+	Days          int     `json:"days"`
+	TotalTrades   int     `json:"total_trades"`
+	Wins          int     `json:"wins"`
+	Losses        int     `json:"losses"`
+	WinRate       float64 `json:"win_rate"`
+	TotalPnL      float64 `json:"total_pnl"`
+	AveragePnL    float64 `json:"average_pnl"`
+	MaxDrawdownPn float64 `json:"max_drawdown_pn"`
+}
+
+// GetTradeSummary returns aggregate trade metrics over the last N days.
+func (db *DB) GetTradeSummary(days int) (*TradeSummary, error) {
+	if days <= 0 {
+		days = 30
+	}
+	start := time.Now().AddDate(0, 0, -days)
+
+	rows, err := db.conn.Query(`
+		SELECT COALESCE(pnl, 0)
+		FROM trades
+		WHERE opened_at >= ?
+		ORDER BY COALESCE(closed_at, opened_at) ASC`, start)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	summary := &TradeSummary{Days: days}
+	equityCurve := 0.0
+	equityPeak := 0.0
+	for rows.Next() {
+		var pnl float64
+		if err := rows.Scan(&pnl); err != nil {
+			return nil, err
+		}
+		summary.TotalTrades++
+		summary.TotalPnL += pnl
+		if pnl > 0 {
+			summary.Wins++
+		} else if pnl < 0 {
+			summary.Losses++
+		}
+
+		equityCurve += pnl
+		if equityCurve > equityPeak {
+			equityPeak = equityCurve
+		}
+		drawdown := equityPeak - equityCurve
+		if drawdown > summary.MaxDrawdownPn {
+			summary.MaxDrawdownPn = drawdown
+		}
+	}
+	if summary.TotalTrades > 0 {
+		summary.WinRate = float64(summary.Wins) / float64(summary.TotalTrades)
+		summary.AveragePnL = summary.TotalPnL / float64(summary.TotalTrades)
+	}
+	return summary, rows.Err()
 }

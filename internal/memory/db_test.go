@@ -184,3 +184,96 @@ func TestListActivePendingDecisions(t *testing.T) {
 		t.Fatalf("request_id=%q, want=req-a", rows[0].RequestID)
 	}
 }
+
+func TestListDecisionHistory(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "memory.db")
+	db, err := NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.UpsertPendingDecision("req-1", "EURUSD", `{"action":"PLACE_PENDING","reason":"breakout"}`, time.Now().Add(5*time.Minute)); err != nil {
+		t.Fatalf("UpsertPendingDecision req-1: %v", err)
+	}
+	if err := db.MarkPendingDecisionDelivered("req-1"); err != nil {
+		t.Fatalf("MarkPendingDecisionDelivered: %v", err)
+	}
+	if err := db.ConsumePendingDecision("req-1"); err != nil {
+		t.Fatalf("ConsumePendingDecision: %v", err)
+	}
+	if err := db.UpsertPendingDecision("req-2", "XAUUSD", `{"action":"HOLD","reason":"low confidence"}`, time.Now().Add(5*time.Minute)); err != nil {
+		t.Fatalf("UpsertPendingDecision req-2: %v", err)
+	}
+
+	all, err := db.ListDecisionHistory(20, "")
+	if err != nil {
+		t.Fatalf("ListDecisionHistory all: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("len(all)=%d, want=2", len(all))
+	}
+
+	filtered, err := db.ListDecisionHistory(20, "EURUSD")
+	if err != nil {
+		t.Fatalf("ListDecisionHistory filtered: %v", err)
+	}
+	if len(filtered) != 1 {
+		t.Fatalf("len(filtered)=%d, want=1", len(filtered))
+	}
+	if filtered[0].RequestID != "req-1" || filtered[0].Decision != "PLACE_PENDING" {
+		t.Fatalf("unexpected filtered record: %+v", filtered[0])
+	}
+}
+
+func TestGetTradeSummary(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "memory.db")
+	db, err := NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	winners := []float64{20, 35}
+	losers := []float64{-10}
+	for i, pnl := range append(winners, losers...) {
+		tr := &Trade{
+			Symbol:     "EURUSD",
+			Direction:  "BUY",
+			Entry:      1.10,
+			Lot:        0.10,
+			SL:         1.09,
+			TP:         1.12,
+			Session:    "LONDON",
+			Timeframe:  "H1",
+			LLMReason:  "test",
+			Confidence: 60,
+			OpenedAt:   now.Add(time.Duration(i) * time.Minute),
+		}
+		id, err := db.InsertTrade(tr)
+		if err != nil {
+			t.Fatalf("InsertTrade: %v", err)
+		}
+		if err := db.CloseTrade(id, 1.11, pnl, now.Add(time.Duration(i+1)*time.Minute)); err != nil {
+			t.Fatalf("CloseTrade: %v", err)
+		}
+	}
+
+	summary, err := db.GetTradeSummary(30)
+	if err != nil {
+		t.Fatalf("GetTradeSummary: %v", err)
+	}
+	if summary.TotalTrades != 3 {
+		t.Fatalf("total_trades=%d, want=3", summary.TotalTrades)
+	}
+	if summary.Wins != 2 || summary.Losses != 1 {
+		t.Fatalf("wins/losses=%d/%d, want=2/1", summary.Wins, summary.Losses)
+	}
+	if summary.WinRate <= 0.66 || summary.WinRate >= 0.67 {
+		t.Fatalf("win_rate=%f, want ~=0.6667", summary.WinRate)
+	}
+	if summary.TotalPnL != 45 {
+		t.Fatalf("total_pnl=%f, want=45", summary.TotalPnL)
+	}
+}

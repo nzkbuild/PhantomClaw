@@ -23,6 +23,7 @@ import (
 	"github.com/nzkbuild/PhantomClaw/internal/alerts"
 	"github.com/nzkbuild/PhantomClaw/internal/bridge"
 	"github.com/nzkbuild/PhantomClaw/internal/config"
+	"github.com/nzkbuild/PhantomClaw/internal/dashboard"
 	"github.com/nzkbuild/PhantomClaw/internal/health"
 	"github.com/nzkbuild/PhantomClaw/internal/llm"
 	"github.com/nzkbuild/PhantomClaw/internal/logging"
@@ -176,6 +177,7 @@ func main() {
 	restoreStdLog := zap.RedirectStdLog(zapLogger)
 	defer restoreStdLog()
 	logger := zapLogger.Sugar()
+	logFilePath := filepath.Join(cfg.Memory.LogDir, "phantomclaw.log")
 	logger.Infow("config loaded", "mode", cfg.Bot.Mode, "tz", cfg.Bot.Timezone, "pairs", cfg.Pairs)
 	for _, warning := range config.SecretWarnings(cfg) {
 		logger.Warnw("security: config secret detected", "warning", warning)
@@ -489,6 +491,15 @@ func main() {
 			"aliases":          aliases,
 		}
 	})
+	bridgeServer.SetLogProvider(func(ctx context.Context, query bridge.LogQuery) ([]map[string]any, error) {
+		return logging.QueryJSONLogFile(logFilePath, logging.Query{
+			Level:     query.Level,
+			Component: query.Component,
+			Contains:  query.Contains,
+			Since:     query.Since,
+			Limit:     query.Limit,
+		})
+	})
 
 	// --- Telegram bot ---
 	var tgBot *telegram.Bot
@@ -629,6 +640,125 @@ func main() {
 	healthMonitor.Start()
 	defer healthMonitor.Stop()
 
+	diagnosticsSnapshot := func() map[string]any {
+		riskStats := riskEngine.Stats()
+		componentStatus := map[string]string{}
+		for name, status := range healthMonitor.Summary() {
+			componentStatus[name] = string(status)
+		}
+
+		currentProvider := ""
+		providerStatus := map[string]string{}
+		if llmRouter != nil {
+			currentProvider = strings.TrimPrefix(llmRouter.Name(), "router:")
+			providerStatus = llmRouter.ProviderStatus()
+		}
+
+		return map[string]any{
+			"time":    time.Now().UTC().Format(time.RFC3339),
+			"mode":    safetyMgr.CurrentMode(),
+			"session": sched.CurrentSession(),
+			"risk": map[string]any{
+				"daily_loss":        riskStats.DailyLoss,
+				"open_positions":    riskStats.OpenPositions,
+				"max_positions":     riskStats.MaxPositions,
+				"profitable_trades": riskStats.ProfitableTrades,
+				"ramp_up_target":    riskStats.RampUpTarget,
+				"halted":            riskStats.Halted,
+			},
+			"health": map[string]any{
+				"overall_ok":  healthMonitor.IsHealthy(),
+				"components":  componentStatus,
+				"bridge_host": cfg.Bridge.Host,
+				"bridge_port": cfg.Bridge.Port,
+			},
+			"llm": map[string]any{
+				"current_provider": currentProvider,
+				"providers":        providerStatus,
+			},
+		}
+	}
+	bridgeServer.SetDiagnosticsProvider(func(ctx context.Context) (map[string]any, error) {
+		return diagnosticsSnapshot(), nil
+	})
+
+	dashboardHost := cfg.Bridge.Host
+	dashboardPort := 8080
+	dashboardServer := dashboard.New(dashboardHost, dashboardPort, dashboard.Dependencies{
+		Snapshot: func(ctx context.Context) (map[string]any, error) {
+			stats := riskEngine.Stats()
+			return map[string]any{
+				"mode":           safetyMgr.CurrentMode(),
+				"session":        sched.CurrentSession(),
+				"daily_loss":     stats.DailyLoss,
+				"open_positions": stats.OpenPositions,
+				"max_positions":  stats.MaxPositions,
+				"halted":         stats.Halted,
+				"time":           time.Now().UTC().Format(time.RFC3339),
+			}, nil
+		},
+		Decisions: func(ctx context.Context, limit int, symbol string) (map[string]any, error) {
+			rows, err := db.ListDecisionHistory(limit, symbol)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{
+				"count":     len(rows),
+				"symbol":    symbol,
+				"decisions": rows,
+			}, nil
+		},
+		Sessions: func(ctx context.Context, limit int, pair string) (map[string]any, error) {
+			if sessionStore == nil {
+				return map[string]any{
+					"count": 0,
+					"pair":  pair,
+					"turns": []memory.Turn{},
+				}, nil
+			}
+
+			var (
+				turns []memory.Turn
+				err   error
+			)
+			if strings.TrimSpace(pair) != "" {
+				turns, err = sessionStore.LoadForPair(pair, limit)
+			} else {
+				turns, err = sessionStore.LoadToday(limit)
+			}
+			if err != nil {
+				return nil, err
+			}
+			if turns == nil {
+				turns = []memory.Turn{}
+			}
+			return map[string]any{
+				"count": len(turns),
+				"pair":  pair,
+				"turns": turns,
+			}, nil
+		},
+		Diagnostics: func(ctx context.Context) (map[string]any, error) {
+			return diagnosticsSnapshot(), nil
+		},
+		Logs: func(ctx context.Context, query bridge.LogQuery) (map[string]any, error) {
+			rows, err := logging.QueryJSONLogFile(logFilePath, logging.Query{
+				Level:     query.Level,
+				Component: query.Component,
+				Contains:  query.Contains,
+				Since:     query.Since,
+				Limit:     query.Limit,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{
+				"count": len(rows),
+				"logs":  rows,
+			}, nil
+		},
+	})
+
 	// --- Session alerts ---
 	var sessionAlerts *alerts.SessionAlerts
 	if tgBot != nil {
@@ -724,6 +854,11 @@ func main() {
 			logger.Fatalf("bridge: %v", err)
 		}
 	}()
+	go func() {
+		if err := dashboardServer.Start(); err != nil && err != http.ErrServerClosed {
+			logger.Fatalf("dashboard: %v", err)
+		}
+	}()
 
 	if tgBot != nil {
 		go tgBot.Start(ctx)
@@ -735,6 +870,7 @@ func main() {
 		"pairs", cfg.Pairs,
 		"llm_providers", len(providers),
 		"bridge", fmt.Sprintf("%s:%d", cfg.Bridge.Host, cfg.Bridge.Port),
+		"dashboard", fmt.Sprintf("%s:%d", dashboardHost, dashboardPort),
 	)
 
 	// --- Graceful shutdown ---
@@ -744,7 +880,14 @@ func main() {
 
 	logger.Info("shutdown: stopping services...")
 	cancel()
-	bridgeServer.Stop()
+	if err := bridgeServer.Stop(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Warnw("shutdown: bridge stop error", "error", err)
+	}
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer shutdownCancel()
+	if err := dashboardServer.Stop(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Warnw("shutdown: dashboard stop error", "error", err)
+	}
 	logger.Info("shutdown: complete")
 }
 
