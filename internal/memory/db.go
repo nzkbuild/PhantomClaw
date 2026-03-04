@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -590,6 +591,22 @@ type TradeSummary struct {
 	MaxDrawdownPn float64 `json:"max_drawdown_pn"`
 }
 
+// EquityPoint is a single cumulative P&L data point for the equity curve.
+type EquityPoint struct {
+	Time  string  `json:"time"`
+	Value float64 `json:"value"`
+}
+
+// PairAnalytics holds per-symbol performance breakdown.
+type PairAnalytics struct {
+	Symbol     string  `json:"symbol"`
+	Trades     int     `json:"trades"`
+	Wins       int     `json:"wins"`
+	WinRate    float64 `json:"win_rate"`
+	TotalPnL   float64 `json:"total_pnl"`
+	AveragePnL float64 `json:"average_pnl"`
+}
+
 // GetTradeSummary returns aggregate trade metrics over the last N days.
 func (db *DB) GetTradeSummary(days int) (*TradeSummary, error) {
 	if days <= 0 {
@@ -637,4 +654,83 @@ func (db *DB) GetTradeSummary(days int) (*TradeSummary, error) {
 		summary.AveragePnL = summary.TotalPnL / float64(summary.TotalTrades)
 	}
 	return summary, rows.Err()
+}
+
+// GetEquityCurve returns a time-ordered series of cumulative P&L points
+// for closed trades within the last N days. Used by the equity curve chart.
+func (db *DB) GetEquityCurve(days int) ([]EquityPoint, error) {
+	if days <= 0 {
+		days = 30
+	}
+	start := time.Now().AddDate(0, 0, -days)
+
+	rows, err := db.conn.Query(`
+		SELECT COALESCE(closed_at, opened_at), COALESCE(pnl, 0)
+		FROM trades
+		WHERE COALESCE(closed_at, opened_at) >= ?
+		ORDER BY COALESCE(closed_at, opened_at) ASC`, start)
+	if err != nil {
+		return nil, fmt.Errorf("memory: equity curve query: %w", err)
+	}
+	defer rows.Close()
+
+	var points []EquityPoint
+	cumulative := 0.0
+	for rows.Next() {
+		var ts time.Time
+		var pnl float64
+		if err := rows.Scan(&ts, &pnl); err != nil {
+			return nil, err
+		}
+		cumulative += pnl
+		points = append(points, EquityPoint{
+			Time:  ts.UTC().Format(time.RFC3339),
+			Value: math.Round(cumulative*100) / 100,
+		})
+	}
+	if points == nil {
+		points = []EquityPoint{}
+	}
+	return points, rows.Err()
+}
+
+// GetPairAnalytics returns per-symbol performance breakdown for closed trades
+// within the last N days, ordered by total P&L descending.
+func (db *DB) GetPairAnalytics(days int) ([]PairAnalytics, error) {
+	if days <= 0 {
+		days = 30
+	}
+	start := time.Now().AddDate(0, 0, -days)
+
+	rows, err := db.conn.Query(`
+		SELECT
+			symbol,
+			COUNT(*) AS trades,
+			SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins,
+			SUM(COALESCE(pnl, 0)) AS total_pnl,
+			AVG(COALESCE(pnl, 0)) AS avg_pnl
+		FROM trades
+		WHERE opened_at >= ?
+		GROUP BY symbol
+		ORDER BY total_pnl DESC`, start)
+	if err != nil {
+		return nil, fmt.Errorf("memory: pair analytics query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PairAnalytics
+	for rows.Next() {
+		var p PairAnalytics
+		if err := rows.Scan(&p.Symbol, &p.Trades, &p.Wins, &p.TotalPnL, &p.AveragePnL); err != nil {
+			return nil, err
+		}
+		if p.Trades > 0 {
+			p.WinRate = float64(p.Wins) / float64(p.Trades)
+		}
+		out = append(out, p)
+	}
+	if out == nil {
+		out = []PairAnalytics{}
+	}
+	return out, rows.Err()
 }

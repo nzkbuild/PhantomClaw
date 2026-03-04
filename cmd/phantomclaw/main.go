@@ -762,7 +762,7 @@ func main() {
 		dashboardServer = dashboard.New(dashboardHost, dashboardPort, dashboard.Dependencies{
 			Snapshot: func(ctx context.Context) (map[string]any, error) {
 				stats := riskEngine.Stats()
-				return map[string]any{
+				snapMap := map[string]any{
 					"mode":             safetyMgr.CurrentMode(),
 					"session":          sched.CurrentSession(),
 					"daily_loss":       stats.DailyLoss,
@@ -772,7 +772,11 @@ func main() {
 					"max_drawdown_pct": cfg.Risk.MaxDrawdownPct,
 					"halted":           stats.Halted,
 					"time":             time.Now().UTC().Format(time.RFC3339),
-				}, nil
+				}
+				if lst := bridgeServer.LastSignalTime(); !lst.IsZero() {
+					snapMap["last_signal_time"] = lst.UTC().Format(time.RFC3339)
+				}
+				return snapMap, nil
 			},
 			Decisions: func(ctx context.Context, limit int, symbol string) (map[string]any, error) {
 				rows, err := dashDB.ListDecisionHistory(limit, symbol)
@@ -832,6 +836,31 @@ func main() {
 				return map[string]any{
 					"count": len(rows),
 					"logs":  rows,
+				}, nil
+			},
+			Equity: func(ctx context.Context, days int) (map[string]any, error) {
+				points, err := dashDB.GetEquityCurve(days)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{
+					"days":   days,
+					"points": points,
+				}, nil
+			},
+			Analytics: func(ctx context.Context, days int) (map[string]any, error) {
+				summary, err := dashDB.GetTradeSummary(days)
+				if err != nil {
+					return nil, err
+				}
+				pairs, err := dashDB.GetPairAnalytics(days)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{
+					"days":    days,
+					"summary": summary,
+					"pairs":   pairs,
 				}, nil
 			},
 		}, authMiddleware)

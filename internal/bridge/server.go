@@ -147,6 +147,9 @@ type Server struct {
 	requestSeq       uint64
 	decisionTTL      time.Duration
 	signalTimeout    time.Duration
+
+	// lastSignalAt tracks when the EA last sent a signal (for stale-data detection).
+	lastSignalAt atomic.Pointer[time.Time]
 }
 
 // NewServer creates a new bridge server.
@@ -240,6 +243,14 @@ func (s *Server) SetLogProvider(provider LogProvider) {
 	s.logProvider = provider
 }
 
+// LastSignalTime returns the time of the last EA signal, or zero if none.
+func (s *Server) LastSignalTime() time.Time {
+	if p := s.lastSignalAt.Load(); p != nil {
+		return *p
+	}
+	return time.Time{}
+}
+
 // handleSignal processes POST /signal from EA.
 func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 	s.setProtocolHeaders(w)
@@ -271,6 +282,10 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 	}
 	s.hasAccountSample = true
 	s.mu.Unlock()
+
+	// Record last signal time for stale-EA detection (#9).
+	now := time.Now()
+	s.lastSignalAt.Store(&now)
 
 	// Process the signal asynchronously so EA can use a very short timeout.
 	if s.onSignal != nil {

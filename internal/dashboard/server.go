@@ -23,6 +23,8 @@ type Dependencies struct {
 	Sessions    func(ctx context.Context, limit int, pair string) (map[string]any, error)
 	Diagnostics func(ctx context.Context) (map[string]any, error)
 	Logs        func(ctx context.Context, query bridge.LogQuery) (map[string]any, error)
+	Equity      func(ctx context.Context, days int) (map[string]any, error)
+	Analytics   func(ctx context.Context, days int) (map[string]any, error)
 }
 
 // Server hosts dashboard UI and API.
@@ -84,6 +86,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	s.mux.HandleFunc("GET /api/diagnostics", s.handleDiagnostics)
 	s.mux.HandleFunc("GET /api/logs", s.handleLogs)
+	s.mux.HandleFunc("GET /api/equity", s.handleEquity)
+	s.mux.HandleFunc("GET /api/analytics", s.handleAnalytics)
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -172,6 +176,38 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	data, err := s.deps.Logs(ctx, query)
 	if err != nil {
 		http.Error(w, `{"error":"failed to load logs"}`, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, data)
+}
+
+func (s *Server) handleEquity(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Equity == nil {
+		http.Error(w, `{"error":"equity provider unavailable"}`, http.StatusNotImplemented)
+		return
+	}
+	days := parsePositiveInt(r.URL.Query().Get("days"), 30, 365)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	data, err := s.deps.Equity(ctx, days)
+	if err != nil {
+		http.Error(w, `{"error":"failed to load equity curve"}`, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, data)
+}
+
+func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Analytics == nil {
+		http.Error(w, `{"error":"analytics provider unavailable"}`, http.StatusNotImplemented)
+		return
+	}
+	days := parsePositiveInt(r.URL.Query().Get("days"), 30, 365)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	data, err := s.deps.Analytics(ctx, days)
+	if err != nil {
+		http.Error(w, `{"error":"failed to load analytics"}`, http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, data)
