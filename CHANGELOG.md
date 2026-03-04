@@ -19,6 +19,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Ops alert worker (`alerts.OpsAlerts`) with Telegram notifications for sustained degradation, state updates, periodic reminders, and recovery
 - Ops alert unit tests for debounce, cooldown, update, reminder, and nested payload parsing behavior
 - v4.2 ops runbook (`v4.2_runbook.md`) mapping reason codes to operator actions and mode decisions
+- Config schema for ops alerting (`ops_alerts.*`) with defaults and validation
+- Failure-injection style ops-alert sequence test covering `GREEN -> RED -> RED(update) -> GREEN` notification flow
 - Bridge request correlation support via `request_id` on `/signal` and `/decision`
 - Bridge tests for correlated decision fetch and backward-compatible symbol polling
 - Durable `pending_decisions` SQLite table and DB APIs for bridge decision persistence
@@ -50,6 +52,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - README synced with operational-truth flow and ops endpoints (`/health/ops`, `/api/ops`, SSE `ops`)
 - Runtime startup now wires ops alerting when Telegram is enabled (poll `/health/ops` every 10s with debounce/cooldown)
 - Telegram `/status` ops block now includes `Action:` guidance derived from `overall.reason_code` plus runbook reference
+- Ops alert timing is now config-backed and hot-reloadable (`ops_alerts.poll_interval_sec`, `degrade_for_sec`, `repeat_every_sec`, `update_cooldown_sec`)
+- Bridge probe/ops probe/diagnostic probe auth token usage now follows hot-reloaded bridge token updates
 - EA now attaches `request_id` in signal payloads and includes it when polling `/decision`
 - Bridge now generates a request ID when absent to preserve compatibility with older EA behavior
 - Bridge `NewServer` now accepts memory DB handle and persists pending decisions with TTL

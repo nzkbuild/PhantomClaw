@@ -377,6 +377,18 @@ $env:PHANTOM_RISK_MAX_DAILY_LOSS_USD = "50"
 $env:PHANTOM_MARKET_FAIL_POLICY = "fail_closed"
 ```
 
+Ops alert tuning (v4.2) is config-backed:
+
+```yaml
+ops_alerts:
+  enabled: true
+  poll_interval_sec: 10
+  probe_timeout_ms: 1500
+  degrade_for_sec: 20
+  repeat_every_sec: 900
+  update_cooldown_sec: 120
+```
+
 ---
 
 ## 📁 File Structure

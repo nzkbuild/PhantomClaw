@@ -25,6 +25,7 @@ type Config struct {
 	Sessions  SessionConfig   `mapstructure:"sessions"`
 	Memory    MemoryConfig    `mapstructure:"memory"`
 	Heartbeat HeartbeatConfig `mapstructure:"heartbeat"`
+	OpsAlerts OpsAlertsConfig `mapstructure:"ops_alerts"`
 	Dashboard DashboardConfig `mapstructure:"dashboard"`
 	Pairs     []string        `mapstructure:"pairs"`
 }
@@ -41,6 +42,16 @@ type DashboardConfig struct {
 type HeartbeatConfig struct {
 	Enabled     bool `mapstructure:"enabled"`
 	IntervalMin int  `mapstructure:"interval_min"`
+}
+
+// OpsAlertsConfig controls operational-truth Telegram alerting behavior.
+type OpsAlertsConfig struct {
+	Enabled           bool `mapstructure:"enabled"`
+	PollIntervalSec   int  `mapstructure:"poll_interval_sec"`
+	ProbeTimeoutMs    int  `mapstructure:"probe_timeout_ms"`
+	DegradeForSec     int  `mapstructure:"degrade_for_sec"`
+	RepeatEverySec    int  `mapstructure:"repeat_every_sec"`
+	UpdateCooldownSec int  `mapstructure:"update_cooldown_sec"`
 }
 
 // BotConfig holds general bot settings.
@@ -317,6 +328,23 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("heartbeat.interval_min must be between 1 and 1440 when heartbeat.enabled=true")
 		}
 	}
+	if cfg.OpsAlerts.Enabled {
+		if cfg.OpsAlerts.PollIntervalSec < 2 || cfg.OpsAlerts.PollIntervalSec > 3600 {
+			return fmt.Errorf("ops_alerts.poll_interval_sec must be between 2 and 3600 when ops_alerts.enabled=true")
+		}
+		if cfg.OpsAlerts.ProbeTimeoutMs < 100 || cfg.OpsAlerts.ProbeTimeoutMs > 10000 {
+			return fmt.Errorf("ops_alerts.probe_timeout_ms must be between 100 and 10000 when ops_alerts.enabled=true")
+		}
+		if cfg.OpsAlerts.DegradeForSec < 5 || cfg.OpsAlerts.DegradeForSec > 3600 {
+			return fmt.Errorf("ops_alerts.degrade_for_sec must be between 5 and 3600 when ops_alerts.enabled=true")
+		}
+		if cfg.OpsAlerts.RepeatEverySec < 30 || cfg.OpsAlerts.RepeatEverySec > 86400 {
+			return fmt.Errorf("ops_alerts.repeat_every_sec must be between 30 and 86400 when ops_alerts.enabled=true")
+		}
+		if cfg.OpsAlerts.UpdateCooldownSec < 1 || cfg.OpsAlerts.UpdateCooldownSec > 3600 {
+			return fmt.Errorf("ops_alerts.update_cooldown_sec must be between 1 and 3600 when ops_alerts.enabled=true")
+		}
+	}
 
 	if len(cfg.Pairs) == 0 {
 		return fmt.Errorf("pairs must contain at least one symbol")
@@ -412,6 +440,13 @@ func buildViper(path string) (*viper.Viper, string) {
 
 	v.SetDefault("heartbeat.enabled", false)
 	v.SetDefault("heartbeat.interval_min", 5)
+
+	v.SetDefault("ops_alerts.enabled", true)
+	v.SetDefault("ops_alerts.poll_interval_sec", 10)
+	v.SetDefault("ops_alerts.probe_timeout_ms", 1500)
+	v.SetDefault("ops_alerts.degrade_for_sec", 20)
+	v.SetDefault("ops_alerts.repeat_every_sec", 900)
+	v.SetDefault("ops_alerts.update_cooldown_sec", 120)
 
 	v.SetDefault("llm.primary", "claude")
 	v.SetDefault("llm.sticky_primary", true)

@@ -57,6 +57,10 @@ func makeSessionAlertSender(sender alertSender, logger *zap.SugaredLogger) func(
 }
 
 func makeBridgeProbe(baseURL, authToken string) telegram.BridgeProbeFunc {
+	return makeBridgeProbeWithToken(baseURL, func() string { return authToken })
+}
+
+func makeBridgeProbeWithToken(baseURL string, authTokenFn func() string) telegram.BridgeProbeFunc {
 	return func(ctx context.Context) (telegram.BridgeProbeResult, error) {
 		client := &http.Client{Timeout: 1500 * time.Millisecond}
 		out := telegram.BridgeProbeResult{}
@@ -94,7 +98,8 @@ func makeBridgeProbe(baseURL, authToken string) telegram.BridgeProbeFunc {
 		if err != nil {
 			return out, err
 		}
-		if strings.TrimSpace(authToken) != "" {
+		authToken := strings.TrimSpace(authTokenFn())
+		if authToken != "" {
 			accountReq.Header.Set("X-Phantom-Bridge-Token", authToken)
 		}
 		if strings.TrimSpace(out.Contract) != "" {
@@ -131,11 +136,15 @@ func makeBridgeProbe(baseURL, authToken string) telegram.BridgeProbeFunc {
 }
 
 func makeRuntimeDiag(baseURL, authToken string, providerCount int, db *memory.DB) telegram.RuntimeDiagFunc {
-	probe := makeBridgeProbe(baseURL, authToken)
+	return makeRuntimeDiagWithToken(baseURL, func() string { return authToken }, providerCount, db)
+}
+
+func makeRuntimeDiagWithToken(baseURL string, authTokenFn func() string, providerCount int, db *memory.DB) telegram.RuntimeDiagFunc {
+	probe := makeBridgeProbeWithToken(baseURL, authTokenFn)
 	return func(ctx context.Context) (string, error) {
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("LLM providers configured: %d\n", providerCount))
-		sb.WriteString(fmt.Sprintf("Bridge auth enabled: %t\n", strings.TrimSpace(authToken) != ""))
+		sb.WriteString(fmt.Sprintf("Bridge auth enabled: %t\n", strings.TrimSpace(authTokenFn()) != ""))
 
 		if db != nil {
 			if jobs, err := db.ListPendingCronJobs(); err == nil {
@@ -159,13 +168,18 @@ func makeRuntimeDiag(baseURL, authToken string, providerCount int, db *memory.DB
 }
 
 func makeBridgeOpsProbe(baseURL, authToken string) func(ctx context.Context) (map[string]any, error) {
+	return makeBridgeOpsProbeWithToken(baseURL, func() string { return authToken })
+}
+
+func makeBridgeOpsProbeWithToken(baseURL string, authTokenFn func() string) func(ctx context.Context) (map[string]any, error) {
 	return func(ctx context.Context) (map[string]any, error) {
 		client := &http.Client{Timeout: 1500 * time.Millisecond}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/health/ops", nil)
 		if err != nil {
 			return nil, err
 		}
-		if strings.TrimSpace(authToken) != "" {
+		authToken := strings.TrimSpace(authTokenFn())
+		if authToken != "" {
 			req.Header.Set("X-Phantom-Bridge-Token", authToken)
 		}
 		resp, err := client.Do(req)
@@ -181,6 +195,18 @@ func makeBridgeOpsProbe(baseURL, authToken string) func(ctx context.Context) (ma
 			return nil, err
 		}
 		return payload, nil
+	}
+}
+
+func buildOpsAlertsRuntimeConfig(cfg config.OpsAlertsConfig, probe alerts.OpsProbe, send alerts.TelegramSender) alerts.OpsAlertsConfig {
+	return alerts.OpsAlertsConfig{
+		PollInterval:   time.Duration(cfg.PollIntervalSec) * time.Second,
+		ProbeTimeout:   time.Duration(cfg.ProbeTimeoutMs) * time.Millisecond,
+		DegradeFor:     time.Duration(cfg.DegradeForSec) * time.Second,
+		RepeatEvery:    time.Duration(cfg.RepeatEverySec) * time.Second,
+		UpdateCooldown: time.Duration(cfg.UpdateCooldownSec) * time.Second,
+		Probe:          probe,
+		Send:           send,
 	}
 }
 
@@ -470,7 +496,19 @@ func main() {
 	} else {
 		logger.Info("bridge: auth token enabled for bridge endpoints")
 	}
-	opsProbe := makeBridgeOpsProbe(bridgeURL, bridgeAuthToken)
+	var bridgeAuthTokenValue atomic.Value
+	bridgeAuthTokenValue.Store(bridgeAuthToken)
+	bridgeAuthTokenFn := func() string {
+		if v, ok := bridgeAuthTokenValue.Load().(string); ok {
+			return strings.TrimSpace(v)
+		}
+		return ""
+	}
+	setBridgeAuthToken := func(next string) {
+		bridgeAuthTokenValue.Store(strings.TrimSpace(next))
+	}
+
+	opsProbe := makeBridgeOpsProbeWithToken(bridgeURL, bridgeAuthTokenFn)
 
 	bridgeServer := bridge.NewServer(
 		cfg.Bridge.Host,
@@ -649,9 +687,9 @@ func main() {
 			Diary:       diaryWriter,
 			Strategy:    strategyMgr,
 			Chat:        brain,
-			BridgeProbe: makeBridgeProbe(bridgeURL, bridgeAuthToken),
+			BridgeProbe: makeBridgeProbeWithToken(bridgeURL, bridgeAuthTokenFn),
 			OpsProbe:    opsProbe,
-			Diag:        makeRuntimeDiag(bridgeURL, bridgeAuthToken, len(providers), db),
+			Diag:        makeRuntimeDiagWithToken(bridgeURL, bridgeAuthTokenFn, len(providers), db),
 			LLMCurrent:  llmCurrent,
 			LLMSwitch:   llmSwitch,
 			LLMStatus:   llmStatus,
@@ -927,8 +965,9 @@ func main() {
 	// --- Session alerts ---
 	var sessionAlerts *alerts.SessionAlerts
 	var opsAlerts *alerts.OpsAlerts
+	var telegramAlert alerts.TelegramSender
 	if tgBot != nil {
-		telegramAlert := makeSessionAlertSender(tgBot, logger)
+		telegramAlert = makeSessionAlertSender(tgBot, logger)
 		sessionAlerts = alerts.NewSessionAlerts(
 			telegramAlert,
 			cfg.Bot.Timezone,
@@ -937,25 +976,24 @@ func main() {
 		defer sessionAlerts.Stop()
 		logger.Info("alerts: session alerts started")
 
-		opsAlerts = alerts.NewOpsAlerts(alerts.OpsAlertsConfig{
-			PollInterval:   10 * time.Second,
-			ProbeTimeout:   1500 * time.Millisecond,
-			DegradeFor:     20 * time.Second,
-			RepeatEvery:    15 * time.Minute,
-			UpdateCooldown: 2 * time.Minute,
-			Probe:          opsProbe,
-			Send:           telegramAlert,
-		})
-		opsAlerts.Start()
-		defer opsAlerts.Stop()
-		logger.Info("alerts: ops alerts started")
+		if cfg.OpsAlerts.Enabled {
+			opsAlerts = alerts.NewOpsAlerts(buildOpsAlertsRuntimeConfig(cfg.OpsAlerts, opsProbe, telegramAlert))
+			opsAlerts.Start()
+			logger.Info("alerts: ops alerts started")
+		}
 	}
+	defer func() {
+		if opsAlerts != nil {
+			opsAlerts.Stop()
+		}
+	}()
 
 	// --- Config hot reload ---
 	if err := config.Watch(*configPath, func(next *config.Config) error {
 		riskEngine.UpdateConfig(next.Risk)
 		bridgeServer.SetSignalTimeout(next.Bridge.SignalTimeoutDuration())
 		bridgeServer.SetAuthToken(next.Bridge.AuthToken)
+		setBridgeAuthToken(next.Bridge.AuthToken)
 
 		nextProviders := make([]llm.Provider, 0, len(next.LLM.Providers))
 		nextProviderByName := make(map[string]llm.Provider)
@@ -1011,6 +1049,25 @@ func main() {
 		for _, warning := range config.SecretWarnings(next) {
 			logger.Warnw("security: config secret detected", "warning", warning)
 		}
+
+		if telegramAlert != nil {
+			if next.OpsAlerts.Enabled {
+				cfgUpdate := buildOpsAlertsRuntimeConfig(next.OpsAlerts, opsProbe, telegramAlert)
+				if opsAlerts == nil {
+					opsAlerts = alerts.NewOpsAlerts(cfgUpdate)
+					opsAlerts.Start()
+					logger.Info("alerts: ops alerts started (hot reload)")
+				} else {
+					opsAlerts.UpdateConfig(cfgUpdate)
+					logger.Info("alerts: ops alerts config updated")
+				}
+			} else if opsAlerts != nil {
+				opsAlerts.Stop()
+				opsAlerts = nil
+				logger.Info("alerts: ops alerts stopped (hot reload)")
+			}
+		}
+
 		logger.Infow("config: hot reload applied",
 			"mode", next.Bot.Mode,
 			"signal_timeout_ms", next.Bridge.SignalTimeoutMs,

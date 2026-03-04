@@ -52,27 +52,30 @@ type opsSnapshot struct {
 
 // NewOpsAlerts creates an ops alert worker with sane defaults.
 func NewOpsAlerts(cfg OpsAlertsConfig) *OpsAlerts {
-	if cfg.PollInterval <= 0 {
-		cfg.PollInterval = 10 * time.Second
-	}
-	if cfg.ProbeTimeout <= 0 {
-		cfg.ProbeTimeout = 1500 * time.Millisecond
-	}
-	if cfg.DegradeFor <= 0 {
-		cfg.DegradeFor = 20 * time.Second
-	}
-	if cfg.RepeatEvery <= 0 {
-		cfg.RepeatEvery = 10 * time.Minute
-	}
-	if cfg.UpdateCooldown <= 0 {
-		cfg.UpdateCooldown = 60 * time.Second
-	}
+	cfg = normalizeOpsAlertsConfig(cfg)
 	return &OpsAlerts{cfg: cfg}
+}
+
+// UpdateConfig applies runtime alert tuning (used by config hot reload).
+func (oa *OpsAlerts) UpdateConfig(cfg OpsAlertsConfig) {
+	cfg = normalizeOpsAlertsConfig(cfg)
+	oa.mu.Lock()
+	defer oa.mu.Unlock()
+
+	// Preserve existing probe/send if update omits them.
+	if cfg.Probe == nil {
+		cfg.Probe = oa.cfg.Probe
+	}
+	if cfg.Send == nil {
+		cfg.Send = oa.cfg.Send
+	}
+	oa.cfg = cfg
 }
 
 // Start begins polling ops status.
 func (oa *OpsAlerts) Start() {
-	if oa.cfg.Probe == nil || oa.cfg.Send == nil {
+	cfg := oa.currentConfig()
+	if cfg.Probe == nil || cfg.Send == nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -89,26 +92,31 @@ func (oa *OpsAlerts) Stop() {
 }
 
 func (oa *OpsAlerts) loop(ctx context.Context) {
-	ticker := time.NewTicker(oa.cfg.PollInterval)
-	defer ticker.Stop()
-
 	// Evaluate immediately at startup, then on interval.
 	oa.tick(ctx, time.Now().UTC())
 	for {
+		wait := oa.currentConfig().PollInterval
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			oa.tick(ctx, time.Now().UTC())
 		}
 	}
 }
 
 func (oa *OpsAlerts) tick(parent context.Context, now time.Time) {
-	probeCtx, cancel := context.WithTimeout(parent, oa.cfg.ProbeTimeout)
+	cfg := oa.currentConfig()
+	if cfg.Probe == nil || cfg.Send == nil {
+		return
+	}
+
+	probeCtx, cancel := context.WithTimeout(parent, cfg.ProbeTimeout)
 	defer cancel()
 
-	payload, err := oa.cfg.Probe(probeCtx)
+	payload, err := cfg.Probe(probeCtx)
 	snap := opsSnapshot{
 		overallStatus: "RED",
 		reasonCode:    "OPS_PROBE_FAILED",
@@ -126,13 +134,13 @@ func (oa *OpsAlerts) tick(parent context.Context, now time.Time) {
 		}
 	}
 
-	alerts := oa.evaluate(now, snap)
+	alerts := oa.evaluate(now, snap, cfg)
 	for _, msg := range alerts {
-		oa.cfg.Send(parent, msg)
+		cfg.Send(parent, msg)
 	}
 }
 
-func (oa *OpsAlerts) evaluate(now time.Time, snap opsSnapshot) []string {
+func (oa *OpsAlerts) evaluate(now time.Time, snap opsSnapshot, cfg OpsAlertsConfig) []string {
 	oa.mu.Lock()
 	defer oa.mu.Unlock()
 
@@ -174,7 +182,7 @@ func (oa *OpsAlerts) evaluate(now time.Time, snap opsSnapshot) []string {
 
 	// Debounced first alert for this incident.
 	if !oa.incidentAlerted {
-		if elapsed < oa.cfg.DegradeFor {
+		if elapsed < cfg.DegradeFor {
 			return nil
 		}
 		oa.incidentAlerted = true
@@ -184,14 +192,14 @@ func (oa *OpsAlerts) evaluate(now time.Time, snap opsSnapshot) []string {
 	}
 
 	// Immediate status/reason update with cooldown.
-	if changed && now.Sub(oa.lastAlertAt) >= oa.cfg.UpdateCooldown {
+	if changed && now.Sub(oa.lastAlertAt) >= cfg.UpdateCooldown {
 		oa.incidentLastAlert = snap
 		oa.lastAlertAt = now
 		return []string{formatDegradeAlert("updated", elapsed, snap)}
 	}
 
 	// Periodic reminder while still degraded.
-	if now.Sub(oa.lastAlertAt) >= oa.cfg.RepeatEvery {
+	if now.Sub(oa.lastAlertAt) >= cfg.RepeatEvery {
 		oa.incidentLastAlert = snap
 		oa.lastAlertAt = now
 		return []string{formatDegradeAlert("still_degraded", elapsed, snap)}
@@ -207,6 +215,31 @@ func (oa *OpsAlerts) resetIncident() {
 	oa.incidentLatest = opsSnapshot{}
 	oa.incidentLastAlert = opsSnapshot{}
 	oa.lastAlertAt = time.Time{}
+}
+
+func (oa *OpsAlerts) currentConfig() OpsAlertsConfig {
+	oa.mu.Lock()
+	defer oa.mu.Unlock()
+	return oa.cfg
+}
+
+func normalizeOpsAlertsConfig(cfg OpsAlertsConfig) OpsAlertsConfig {
+	if cfg.PollInterval <= 0 {
+		cfg.PollInterval = 10 * time.Second
+	}
+	if cfg.ProbeTimeout <= 0 {
+		cfg.ProbeTimeout = 1500 * time.Millisecond
+	}
+	if cfg.DegradeFor <= 0 {
+		cfg.DegradeFor = 20 * time.Second
+	}
+	if cfg.RepeatEvery <= 0 {
+		cfg.RepeatEvery = 10 * time.Minute
+	}
+	if cfg.UpdateCooldown <= 0 {
+		cfg.UpdateCooldown = 60 * time.Second
+	}
+	return cfg
 }
 
 func parseOpsSnapshot(payload map[string]any) (opsSnapshot, error) {

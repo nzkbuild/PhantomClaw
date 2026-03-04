@@ -125,3 +125,30 @@ PHANTOM_TELEGRAM_TOKEN=from_secrets_file
 		t.Fatalf("telegram token=%q, want from_secrets_file", got)
 	}
 }
+
+func TestValidateOpsAlertsRangeChecks(t *testing.T) {
+	cfg := validConfig()
+	cfg.OpsAlerts = OpsAlertsConfig{
+		Enabled:           true,
+		PollIntervalSec:   1,
+		ProbeTimeoutMs:    1500,
+		DegradeForSec:     20,
+		RepeatEverySec:    900,
+		UpdateCooldownSec: 120,
+	}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected ops_alerts.poll_interval_sec validation error")
+	}
+	if !strings.Contains(err.Error(), "ops_alerts.poll_interval_sec") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateOpsAlertsDisabledAllowsZeroValues(t *testing.T) {
+	cfg := validConfig()
+	cfg.OpsAlerts = OpsAlertsConfig{Enabled: false}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected valid config with ops_alerts disabled, got: %v", err)
+	}
+}
