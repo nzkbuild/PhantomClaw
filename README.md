@@ -2,7 +2,7 @@
 
 > Your personal AI trading assistant that thinks, trades, and learns — all on autopilot.
 
-PhantomClaw is an autonomous trading bot that connects to **MetaTrader 5** and uses AI to analyze markets and place trades for you. It supports **multiple LLM providers** (Claude, GPT-4o, Groq, OpenRouter, Ollama, and any OpenAI-compatible API) with automatic failover. It runs 24/7 on your Windows VPS, communicates with you through **Telegram**, and gets smarter after every trade.
+PhantomClaw is an autonomous trading bot that connects to **MetaTrader 5** and uses AI to analyze markets and place trades for you. It supports **multiple LLM providers** (Claude, GPT-4o, Groq, OpenRouter, Ollama, and any OpenAI-compatible API) with automatic failover. It runs 24/7 on your Windows VPS, communicates with you through **Telegram**, and gets smarter after every trade. A built-in **Bloomberg-inspired dashboard** gives you real-time visibility into performance, risk, and system health.
 
 **Private use only.**
 
@@ -14,6 +14,7 @@ PhantomClaw is an autonomous trading bot that connects to **MetaTrader 5** and u
 - [What You Need](#-what-you-need)
 - [Setup Guide](#-setup-guide)
 - [How to Run](#-how-to-run)
+- [Dashboard](#-dashboard)
 - [Controlling the Bot](#-controlling-the-bot)
 - [How It Works](#-how-it-works)
 - [Trading Sessions](#-trading-sessions)
@@ -147,16 +148,66 @@ cd C:\PhantomClaw
 
 You should see:
 ```
-🐾 PhantomClaw v4.0.0 starting...
-config loaded (mode=AUTO, tz=Asia/Kuala_Lumpur, pairs=[XAUUSD EURUSD USDJPY GBPUSD])
-memory: SQLite initialized
-sessions: store ready (dir=data/sessions)
-heartbeat: started (every 5 min)
-agent: brain initialized with full integrations + conversation memory
-🐾 PhantomClaw is running
+  🐾 PhantomClaw v4.1.0
+  ──────────────────────────────────────
+  Config       ✓  AUTO mode · Asia/Kuala_Lumpur
+  Secrets      ✓  loaded from .secrets
+  Memory       ✓  SQLite ready
+  Risk         ✓  max 0.10 lot · $100 daily limit
+  Providers    ✓  claude (primary) + 2 fallbacks
+  Bridge       ✓  127.0.0.1:8765
+  Dashboard    ✓  http://127.0.0.1:8080
+  Telegram     ✓  connected
+  Hot Reload   ✓  watching config.yaml
+  ──────────────────────────────────────
+  Ready. Waiting for EA signals...
 ```
 
-Open Telegram and send `/status` to your bot — it should reply!
+Open `http://127.0.0.1:8080` for the live dashboard (SSE stream + model switcher), or send `/status` on Telegram.
+
+---
+
+## 📊 Dashboard
+
+PhantomClaw includes a **Bloomberg-inspired control deck** accessible at `http://127.0.0.1:8080` (configurable). The dashboard uses **Server-Sent Events (SSE)** for real-time updates — no manual refresh needed.
+
+### Views
+
+| View | What It Shows |
+|------|---------------|
+| **Control Deck** | KPI cards (mode, session, positions, daily P&L), mini equity chart, provider panel, recent decisions |
+| **Equity Curve** | Full-width TradingView chart of cumulative P&L over time |
+| **Decisions** | Filterable decision history with action badges and status |
+| **Analytics** | Win rate, total/avg P&L, per-pair breakdown table |
+| **Providers** | LLM provider status, active primary indicator, model switcher |
+| **Diagnostics** | Component health, risk engine status, structured data |
+| **Live Logs** | Rolling log stream with level/component/message filters |
+
+### Configuration
+
+```yaml
+dashboard:
+  host: "127.0.0.1"     # Bind address (loopback only by default)
+  port: 8080            # Dashboard port
+  auth_user: "admin"    # Optional basic auth username
+  auth_pass: "secret"   # Optional basic auth password
+```
+
+> ⚠️ If you bind to a non-loopback address without auth configured, the bot will **automatically fall back to 127.0.0.1** for safety.
+
+### API Endpoints
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/snapshot` | System state (mode, risk, positions) |
+| GET | `/api/equity?days=30` | Cumulative P&L series for chart |
+| GET | `/api/analytics?days=30` | Win rate + per-pair breakdown |
+| GET | `/api/decisions?limit=200&symbol=XAUUSD` | Decision history |
+| GET | `/api/sessions?limit=100&pair=XAUUSD` | Conversation/session turns |
+| GET | `/api/diagnostics` | Component health (secrets auto-redacted) |
+| GET | `/api/logs?level=error&limit=100` | Filtered log entries |
+| GET | `/api/events` | SSE stream (snapshot + logs every 3s) |
+| POST | `/api/switch-model?name=claude` | Switch primary LLM provider |
 
 ---
 
@@ -193,8 +244,8 @@ Only the configured `telegram.chat_id` is authorized to control the bot.
 ```
                     You (Telegram)
                          ↕
-   MT5 EA ──signals──→ PhantomClaw Bot
-      ↑                    │
+   MT5 EA ──signals──→ PhantomClaw Bot ←──→ Dashboard (SSE)
+      ↑                    │                  http://127.0.0.1:8080
       └───── decisions ────┘
                          ↕
                     AI (Claude/GPT-4o)
@@ -281,6 +332,11 @@ PhantomClaw has multiple layers of protection — **the AI cannot override these
 | **Weekend detection** | No trading on weekends |
 | **Session enforcement** | OBSERVE mode forced outside trading hours |
 | **`/halt` command** | You can freeze everything instantly from Telegram |
+| **Dashboard auth** | Optional Basic Auth on all dashboard endpoints |
+| **Secret redaction** | API keys/tokens auto-scrubbed from `/api/diagnostics` |
+| **Read-only DB** | Dashboard queries use a separate read-only SQLite connection |
+| **Loopback guard** | Dashboard auto-binds to 127.0.0.1 if exposed without auth |
+| **Queued model switches** | LLM provider changes are deferred while a signal is in-flight |
 
 ---
 
@@ -307,34 +363,43 @@ PhantomClaw/
 ├── phantomclaw.exe          ← The bot (after you build it)
 ├── config.example.yaml      ← Safe template (tracked)
 ├── config.yaml              ← Your local settings (gitignored)
-├── V2_BLUEPRINT.md          ← V2 upgrade roadmap
+├── VERSION                  ← Current version (4.1.0)
+├── v4.1_blueprint.md        ← Hardening roadmap
+├── scripts/
+│   └── phantomclaw.ps1      ← Build/run/test menu script
 ├── ea/
 │   └── PhantomClaw.mq5      ← MT5 Expert Advisor (copy to MT5)
 ├── data/
 │   ├── phantom.db            ← Memory database (auto-created)
-│   ├── sessions/             ← Conversation history (JSONL, auto-created)
-│   │   └── 2026-03-02.jsonl  ← Today's turns
+│   ├── sessions/             ← Conversation history (JSONL)
 │   └── logs/
-│       └── phantomclaw.log   ← Log file (auto-created)
+│       └── phantomclaw.log   ← Structured JSON log file
 ├── cmd/phantomclaw/
-│   └── main.go               ← Entry point
-├── internal/                  ← All the brain code
-│   ├── agent/                 ← The AI decision engine (ReAct loop)
-│   ├── bridge/                ← MT5 communication
+│   └── main.go               ← Entry point + wiring
+├── internal/
+│   ├── agent/                 ← AI decision engine (ReAct loop)
+│   ├── bridge/                ← MT5 EA communication (REST API)
+│   ├── config/                ← Config loading + validation
+│   ├── dashboard/             ← Dashboard server + Bloomberg UI
+│   │   ├── server.go          ← API routes + SSE handler
+│   │   ├── security.go        ← Auth middleware + secret redaction
+│   │   └── assets/index.html  ← Single-page dashboard (embedded)
 │   ├── llm/                   ← AI providers + smart router
 │   │   ├── generic.go         ← OpenAI-compatible adapter
-│   │   ├── errors.go          ← Error classifier
-│   │   └── router.go          ← Smart router with cooldown
-│   ├── memory/                ← Database & learning
+│   │   ├── router.go          ← Router with cooldown + queued switches
+│   │   └── errors.go          ← Error classifier
+│   ├── logging/               ← Structured logging + startup banner
+│   │   ├── banner.go          ← Pretty startup/shutdown output
+│   │   └── query.go           ← Log file query engine
+│   ├── memory/                ← Database, learning, analytics
+│   │   ├── db.go              ← Trades, decisions, equity curve, pair analytics
 │   │   └── session.go         ← Conversation history (JSONL)
-│   ├── scheduler/             ← Session cron + heartbeat
-│   │   └── heartbeat.go       ← Health monitoring
-│   ├── skills/                ← Agent tools
-│   │   ├── mvp.go             ← Trading tools
-│   │   ├── cron.go            ← Self-scheduling tool
-│   │   └── web.go             ← Web search + fetch
+│   ├── market/                ← Market data feeds
 │   ├── risk/                  ← Safety guardrails
-│   └── ...
+│   ├── safety/                ← Mode manager (AUTO/OBSERVE/HALT)
+│   ├── scheduler/             ← Session cron + heartbeat
+│   ├── skills/                ← Agent tools (trade, cron, web)
+│   └── telegram/              ← Telegram bot commands
 └── PRD.md                     ← Product Requirements Document
 ```
 
@@ -380,4 +445,4 @@ Start-Process -WindowStyle Hidden .\phantomclaw.exe
 
 ---
 
-*Built with Go, Claude, and a lot of coffee ☕*
+*Built with Go, Claude, and a lot of coffee ☕ · v4.1.0*
