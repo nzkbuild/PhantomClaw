@@ -277,3 +277,228 @@ func TestGetTradeSummary(t *testing.T) {
 		t.Fatalf("total_pnl=%f, want=45", summary.TotalPnL)
 	}
 }
+
+func TestGetTradeSummaryExcludesOpenTrades(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "memory.db")
+	db, err := NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	closedID, err := db.InsertTrade(&Trade{
+		Symbol:     "EURUSD",
+		Direction:  "BUY",
+		Entry:      1.10,
+		Lot:        0.10,
+		SL:         1.09,
+		TP:         1.12,
+		Session:    "LONDON",
+		Timeframe:  "H1",
+		LLMReason:  "closed",
+		Confidence: 70,
+		OpenedAt:   now.Add(-30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("InsertTrade closed: %v", err)
+	}
+	if err := db.CloseTrade(closedID, 1.11, 12.0, now.Add(-20*time.Minute)); err != nil {
+		t.Fatalf("CloseTrade closed: %v", err)
+	}
+
+	if _, err := db.InsertTrade(&Trade{
+		Symbol:     "EURUSD",
+		Direction:  "BUY",
+		Entry:      1.10,
+		Lot:        0.10,
+		SL:         1.09,
+		TP:         1.12,
+		Session:    "LONDON",
+		Timeframe:  "H1",
+		LLMReason:  "open",
+		Confidence: 70,
+		OpenedAt:   now.Add(-10 * time.Minute),
+	}); err != nil {
+		t.Fatalf("InsertTrade open: %v", err)
+	}
+
+	summary, err := db.GetTradeSummary(30)
+	if err != nil {
+		t.Fatalf("GetTradeSummary: %v", err)
+	}
+	if summary.TotalTrades != 1 {
+		t.Fatalf("total_trades=%d, want=1 (open trades must be excluded)", summary.TotalTrades)
+	}
+	if summary.TotalPnL != 12.0 {
+		t.Fatalf("total_pnl=%f, want=12", summary.TotalPnL)
+	}
+}
+
+func TestGetEquityCurveUsesClosedTradesOnly(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "memory.db")
+	db, err := NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now().UTC()
+	firstID, err := db.InsertTrade(&Trade{
+		Symbol:     "XAUUSD",
+		Direction:  "BUY",
+		Entry:      100,
+		Lot:        0.10,
+		SL:         99,
+		TP:         101,
+		Session:    "LONDON",
+		Timeframe:  "H1",
+		LLMReason:  "first",
+		Confidence: 60,
+		OpenedAt:   now.Add(-3 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("InsertTrade first: %v", err)
+	}
+	if err := db.CloseTrade(firstID, 101, 5.0, now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("CloseTrade first: %v", err)
+	}
+
+	if _, err := db.InsertTrade(&Trade{
+		Symbol:     "XAUUSD",
+		Direction:  "BUY",
+		Entry:      100,
+		Lot:        0.10,
+		SL:         99,
+		TP:         101,
+		Session:    "LONDON",
+		Timeframe:  "H1",
+		LLMReason:  "open",
+		Confidence: 60,
+		OpenedAt:   now.Add(-90 * time.Minute),
+	}); err != nil {
+		t.Fatalf("InsertTrade open: %v", err)
+	}
+
+	secondID, err := db.InsertTrade(&Trade{
+		Symbol:     "XAUUSD",
+		Direction:  "SELL",
+		Entry:      100,
+		Lot:        0.10,
+		SL:         101,
+		TP:         99,
+		Session:    "NY",
+		Timeframe:  "H1",
+		LLMReason:  "second",
+		Confidence: 60,
+		OpenedAt:   now.Add(-70 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("InsertTrade second: %v", err)
+	}
+	if err := db.CloseTrade(secondID, 99.5, -2.0, now.Add(-60*time.Minute)); err != nil {
+		t.Fatalf("CloseTrade second: %v", err)
+	}
+
+	points, err := db.GetEquityCurve(30)
+	if err != nil {
+		t.Fatalf("GetEquityCurve: %v", err)
+	}
+	if len(points) != 2 {
+		t.Fatalf("len(points)=%d, want=2 (open trades must be excluded)", len(points))
+	}
+	if points[0].Value != 5.0 {
+		t.Fatalf("points[0].value=%f, want=5.0", points[0].Value)
+	}
+	if points[1].Value != 3.0 {
+		t.Fatalf("points[1].value=%f, want=3.0", points[1].Value)
+	}
+}
+
+func TestGetPairAnalyticsUsesClosedTradesOnly(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "memory.db")
+	db, err := NewDB(dbPath)
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	eurClosed, err := db.InsertTrade(&Trade{
+		Symbol:     "EURUSD",
+		Direction:  "BUY",
+		Entry:      1.10,
+		Lot:        0.10,
+		SL:         1.09,
+		TP:         1.12,
+		Session:    "LONDON",
+		Timeframe:  "H1",
+		LLMReason:  "eur closed",
+		Confidence: 60,
+		OpenedAt:   now.Add(-2 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("InsertTrade eur closed: %v", err)
+	}
+	if err := db.CloseTrade(eurClosed, 1.11, 9.0, now.Add(-90*time.Minute)); err != nil {
+		t.Fatalf("CloseTrade eur closed: %v", err)
+	}
+
+	if _, err := db.InsertTrade(&Trade{
+		Symbol:     "EURUSD",
+		Direction:  "BUY",
+		Entry:      1.10,
+		Lot:        0.10,
+		SL:         1.09,
+		TP:         1.12,
+		Session:    "LONDON",
+		Timeframe:  "H1",
+		LLMReason:  "eur open",
+		Confidence: 60,
+		OpenedAt:   now.Add(-30 * time.Minute),
+	}); err != nil {
+		t.Fatalf("InsertTrade eur open: %v", err)
+	}
+
+	xauClosed, err := db.InsertTrade(&Trade{
+		Symbol:     "XAUUSD",
+		Direction:  "SELL",
+		Entry:      2000,
+		Lot:        0.10,
+		SL:         2005,
+		TP:         1990,
+		Session:    "NY",
+		Timeframe:  "H1",
+		LLMReason:  "xau closed",
+		Confidence: 60,
+		OpenedAt:   now.Add(-80 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("InsertTrade xau closed: %v", err)
+	}
+	if err := db.CloseTrade(xauClosed, 2001, -4.0, now.Add(-70*time.Minute)); err != nil {
+		t.Fatalf("CloseTrade xau closed: %v", err)
+	}
+
+	rows, err := db.GetPairAnalytics(30)
+	if err != nil {
+		t.Fatalf("GetPairAnalytics: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("len(rows)=%d, want=2", len(rows))
+	}
+
+	pairs := map[string]PairAnalytics{}
+	for _, row := range rows {
+		pairs[row.Symbol] = row
+	}
+
+	eur := pairs["EURUSD"]
+	if eur.Trades != 1 || eur.Wins != 1 || eur.TotalPnL != 9.0 {
+		t.Fatalf("EURUSD analytics unexpected: %+v", eur)
+	}
+	xau := pairs["XAUUSD"]
+	if xau.Trades != 1 || xau.Wins != 0 || xau.TotalPnL != -4.0 {
+		t.Fatalf("XAUUSD analytics unexpected: %+v", xau)
+	}
+}

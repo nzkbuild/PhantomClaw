@@ -106,10 +106,17 @@ func TestSetPrimaryQueued_LastWriteWins(t *testing.T) {
 
 // TestBeginEndSignal_NegativeGuard verifies EndSignal never goes negative.
 func TestBeginEndSignal_NegativeGuard(t *testing.T) {
-	r := newTestRouter(&stubProvider{"alpha"})
+	a := &stubProvider{"alpha"}
+	b := &stubProvider{"beta"}
+	r := newTestRouter(a, b)
+
 	r.EndSignal() // mismatched — should not panic or go negative
-	if got := r.signalDepth.Load(); got != 0 {
-		t.Fatalf("signalDepth = %d, want 0 after guard", got)
+	applied := r.SetPrimaryQueued(b)
+	if !applied {
+		t.Fatal("expected immediate apply after mismatched EndSignal guard")
+	}
+	if got := r.providers[0].Name(); got != "beta" {
+		t.Fatalf("primary=%q, want=%q", got, "beta")
 	}
 }
 

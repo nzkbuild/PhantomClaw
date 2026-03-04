@@ -895,9 +895,7 @@ func contractMajor(v string) string {
 	if v == "" {
 		return ""
 	}
-	if strings.HasPrefix(v, "v") {
-		v = v[1:]
-	}
+	v = strings.TrimPrefix(v, "v")
 	parts := strings.SplitN(v, ".", 2)
 	return parts[0]
 }

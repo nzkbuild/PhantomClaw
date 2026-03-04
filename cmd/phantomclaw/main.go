@@ -717,9 +717,23 @@ func main() {
 	})
 
 	// --- Dashboard setup ---
-	dashboardHost := cfg.Dashboard.Host
+	dashboardHost := strings.TrimSpace(cfg.Dashboard.Host)
 	if dashboardHost == "" {
-		dashboardHost = cfg.Bridge.Host
+		dashboardHost = "127.0.0.1"
+	}
+	authUser := strings.TrimSpace(cfg.Dashboard.AuthUser)
+	authPass := strings.TrimSpace(cfg.Dashboard.AuthPass)
+	if !isLoopbackHost(dashboardHost) {
+		if authUser == "" || authPass == "" {
+			logger.Warnw("dashboard: non-loopback host without auth is unsafe; forcing loopback bind",
+				"configured_host", dashboardHost,
+			)
+			dashboardHost = "127.0.0.1"
+		} else {
+			logger.Warnw("dashboard: binding on non-loopback host; ensure firewall restrictions",
+				"host", dashboardHost,
+			)
+		}
 	}
 	dashboardPort := cfg.Dashboard.Port
 	if dashboardPort <= 0 {
@@ -755,7 +769,7 @@ func main() {
 		}
 	}
 
-	authMiddleware := dashboard.BasicAuth(cfg.Dashboard.AuthUser, cfg.Dashboard.AuthPass)
+	authMiddleware := dashboard.BasicAuth(authUser, authPass)
 
 	var dashboardServer *dashboard.Server
 	if dashboardPort != 0 {
@@ -768,8 +782,8 @@ func main() {
 					"daily_loss":       stats.DailyLoss,
 					"open_positions":   stats.OpenPositions,
 					"max_positions":    stats.MaxPositions,
-					"max_daily_loss":   cfg.Risk.MaxDailyLossUSD,
-					"max_drawdown_pct": cfg.Risk.MaxDrawdownPct,
+					"max_daily_loss":   stats.MaxDailyLossUSD,
+					"max_drawdown_pct": stats.MaxDrawdownPct,
 					"halted":           stats.Halted,
 					"time":             time.Now().UTC().Format(time.RFC3339),
 				}
@@ -1060,6 +1074,21 @@ func firstAvailableTCPPort(host string, preferred int, attempts int) (int, error
 		lastErr = fmt.Errorf("no available ports")
 	}
 	return 0, lastErr
+}
+
+func isLoopbackHost(host string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(host))
+	if normalized == "" {
+		return false
+	}
+	if normalized == "localhost" {
+		return true
+	}
+	if strings.HasPrefix(normalized, "[") && strings.HasSuffix(normalized, "]") && len(normalized) > 2 {
+		normalized = normalized[1 : len(normalized)-1]
+	}
+	ip := net.ParseIP(normalized)
+	return ip != nil && ip.IsLoopback()
 }
 
 // reorderProviders puts the provider with the given name first, keeping the rest in order.

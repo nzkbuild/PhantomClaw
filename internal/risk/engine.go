@@ -184,6 +184,8 @@ type Stats struct {
 	DailyLoss        float64
 	OpenPositions    int
 	MaxPositions     int
+	MaxDailyLossUSD  float64
+	MaxDrawdownPct   float64
 	ProfitableTrades int
 	RampUpTarget     int
 	Halted           bool
@@ -196,6 +198,8 @@ func (e *Engine) Stats() Stats {
 		DailyLoss:        e.dailyLoss,
 		OpenPositions:    e.openPositions,
 		MaxPositions:     e.cfg.MaxOpenPositions,
+		MaxDailyLossUSD:  e.cfg.MaxDailyLossUSD,
+		MaxDrawdownPct:   e.cfg.MaxDrawdownPct,
 		ProfitableTrades: e.profitableTrades,
 		RampUpTarget:     e.cfg.RampUpTrades,
 		Halted:           e.halted,

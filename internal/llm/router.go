@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -24,10 +23,10 @@ type Router struct {
 	stickyPrimary  bool          // when true, only primary provider is used
 
 	// Signal-in-flight guard (issue #7).
-	// signalDepth counts concurrent signals being processed.  pendingSwitch holds
-	// a provider that should become primary once no signal is in flight.
-	signalDepth   atomic.Int32
-	pendingMu     sync.Mutex
+	// signalMu guards signalDepth and pendingSwitch so switch/apply decisions
+	// are atomic with respect to BeginSignal/EndSignal.
+	signalMu      sync.Mutex
+	signalDepth   int
 	pendingSwitch Provider // nil when no switch is queued
 }
 
@@ -207,10 +206,10 @@ func (r *Router) SetPrimary(p Provider) {
 // until that signal completes.  Returns true if the switch was applied immediately,
 // false if it was queued.
 func (r *Router) SetPrimaryQueued(p Provider) (applied bool) {
-	r.pendingMu.Lock()
-	defer r.pendingMu.Unlock()
+	r.signalMu.Lock()
+	defer r.signalMu.Unlock()
 
-	if r.signalDepth.Load() == 0 {
+	if r.signalDepth == 0 {
 		r.mu.Lock()
 		r.applyPrimaryLocked(p)
 		r.mu.Unlock()
@@ -224,26 +223,25 @@ func (r *Router) SetPrimaryQueued(p Provider) (applied bool) {
 
 // BeginSignal marks the start of signal processing.  Must be paired with EndSignal.
 func (r *Router) BeginSignal() {
-	r.signalDepth.Add(1)
+	r.signalMu.Lock()
+	r.signalDepth++
+	r.signalMu.Unlock()
 }
 
 // EndSignal marks the end of signal processing and applies any queued primary switch.
 func (r *Router) EndSignal() {
-	depth := r.signalDepth.Add(-1)
-	if depth < 0 {
-		// Bug guard — never go negative.
-		r.signalDepth.Store(0)
-		depth = 0
+	var pending Provider
+
+	r.signalMu.Lock()
+	if r.signalDepth > 0 {
+		r.signalDepth--
 	}
-	if depth != 0 {
-		// Other signals still in flight; leave pending switch for last one.
-		return
+	// Apply only when all in-flight signals have completed.
+	if r.signalDepth == 0 && r.pendingSwitch != nil {
+		pending = r.pendingSwitch
+		r.pendingSwitch = nil
 	}
-	// Last signal completed — drain any pending switch.
-	r.pendingMu.Lock()
-	pending := r.pendingSwitch
-	r.pendingSwitch = nil
-	r.pendingMu.Unlock()
+	r.signalMu.Unlock()
 
 	if pending != nil {
 		r.mu.Lock()

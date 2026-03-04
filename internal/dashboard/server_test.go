@@ -82,3 +82,52 @@ func TestDashboardLogsEndpointParsesFilters(t *testing.T) {
 		t.Fatalf("unexpected since: %v", got.Since)
 	}
 }
+
+func TestDashboardEquityEndpointParsesDays(t *testing.T) {
+	gotDays := 0
+	s := New("127.0.0.1", 8080, Dependencies{
+		Equity: func(ctx context.Context, days int) (map[string]any, error) {
+			gotDays = days
+			return map[string]any{
+				"days":   days,
+				"points": []any{},
+			}, nil
+		},
+	}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/equity?days=7", nil)
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotDays != 7 {
+		t.Fatalf("days=%d, want=7", gotDays)
+	}
+}
+
+func TestDashboardAnalyticsEndpointDefaultsDays(t *testing.T) {
+	gotDays := 0
+	s := New("127.0.0.1", 8080, Dependencies{
+		Analytics: func(ctx context.Context, days int) (map[string]any, error) {
+			gotDays = days
+			return map[string]any{
+				"days":    days,
+				"summary": map[string]any{},
+				"pairs":   []any{},
+			}, nil
+		},
+	}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/analytics", nil)
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotDays != 30 {
+		t.Fatalf("days=%d, want default 30", gotDays)
+	}
+}

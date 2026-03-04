@@ -617,8 +617,8 @@ func (db *DB) GetTradeSummary(days int) (*TradeSummary, error) {
 	rows, err := db.conn.Query(`
 		SELECT COALESCE(pnl, 0)
 		FROM trades
-		WHERE opened_at >= ?
-		ORDER BY COALESCE(closed_at, opened_at) ASC`, start)
+		WHERE closed_at IS NOT NULL AND closed_at >= ?
+		ORDER BY closed_at ASC`, start)
 	if err != nil {
 		return nil, err
 	}
@@ -665,10 +665,10 @@ func (db *DB) GetEquityCurve(days int) ([]EquityPoint, error) {
 	start := time.Now().AddDate(0, 0, -days)
 
 	rows, err := db.conn.Query(`
-		SELECT COALESCE(closed_at, opened_at), COALESCE(pnl, 0)
+		SELECT closed_at, COALESCE(pnl, 0)
 		FROM trades
-		WHERE COALESCE(closed_at, opened_at) >= ?
-		ORDER BY COALESCE(closed_at, opened_at) ASC`, start)
+		WHERE closed_at IS NOT NULL AND closed_at >= ?
+		ORDER BY closed_at ASC`, start)
 	if err != nil {
 		return nil, fmt.Errorf("memory: equity curve query: %w", err)
 	}
@@ -710,7 +710,7 @@ func (db *DB) GetPairAnalytics(days int) ([]PairAnalytics, error) {
 			SUM(COALESCE(pnl, 0)) AS total_pnl,
 			AVG(COALESCE(pnl, 0)) AS avg_pnl
 		FROM trades
-		WHERE opened_at >= ?
+		WHERE closed_at IS NOT NULL AND closed_at >= ?
 		GROUP BY symbol
 		ORDER BY total_pnl DESC`, start)
 	if err != nil {
