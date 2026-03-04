@@ -41,7 +41,7 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-var version = "4.0.0"
+var version = "4.1.0"
 
 type alertSender interface {
 	Send(ctx context.Context, text string)

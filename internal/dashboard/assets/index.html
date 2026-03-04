@@ -1,1038 +1,1700 @@
 <!doctype html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>PhantomClaw Control Deck</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<style>
-:root{
-  --bg:#07090d;--surface:#0d1117;--surface2:#111820;--surface3:#161f2a;
-  --border:#1e2d3d;--border2:#253445;
-  --amber:#f5a623;--amber-dim:#c47d0e;--amber-glow:rgba(245,166,35,.12);
-  --cyan:#00d4ff;--cyan-dim:#0097b8;
-  --ok:#22c55e;--ok-dim:#16a34a;--ok-glow:rgba(34,197,94,.12);
-  --bad:#ef4444;--bad-dim:#b91c1c;--bad-glow:rgba(239,68,68,.12);
-  --warn:#f59e0b;--warn-dim:#b45309;
-  --text:#e2e8f0;--muted:#64748b;--muted2:#475569;
-  --sidebar-w:220px;
-}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Space Grotesk',sans-serif;background:var(--bg);color:var(--text);display:flex;min-height:100vh;font-size:14px}
-.mono{font-family:'JetBrains Mono',monospace}
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PhantomClaw Control Deck</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet">
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    :root {
+      --bg: #07090d;
+      --surface: #0d1117;
+      --surface2: #111820;
+      --surface3: #161f2a;
+      --border: #1e2d3d;
+      --border2: #253445;
+      --amber: #f5a623;
+      --amber-dim: #c47d0e;
+      --amber-glow: rgba(245, 166, 35, .12);
+      --cyan: #00d4ff;
+      --cyan-dim: #0097b8;
+      --ok: #22c55e;
+      --ok-dim: #16a34a;
+      --ok-glow: rgba(34, 197, 94, .12);
+      --bad: #ef4444;
+      --bad-dim: #b91c1c;
+      --bad-glow: rgba(239, 68, 68, .12);
+      --warn: #f59e0b;
+      --warn-dim: #b45309;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --muted2: #475569;
+      --sidebar-w: 220px;
+    }
 
-/* ── SIDEBAR ── */
-.sidebar{
-  width:var(--sidebar-w);min-width:var(--sidebar-w);height:100vh;
-  position:sticky;top:0;display:flex;flex-direction:column;
-  background:var(--surface);border-right:1px solid var(--border);
-  overflow:hidden;z-index:10;flex-shrink:0;
-}
-.sb-logo{padding:18px 16px 14px;border-bottom:1px solid var(--border)}
-.sb-logo-name{font-family:'JetBrains Mono',monospace;font-weight:600;font-size:15px;color:var(--amber);letter-spacing:.04em}
-.sb-logo-ver{font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-top:2px}
-.sb-nav{flex:1;overflow-y:auto;padding:8px 0}
-.sb-nav::-webkit-scrollbar{width:3px}
-.sb-nav::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
-.nav-group{margin-bottom:4px}
-.nav-group-label{
-  font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;
-  color:var(--muted2);padding:8px 16px 4px;
-}
-.nav-item{
-  display:flex;align-items:center;gap:10px;padding:8px 16px;
-  cursor:pointer;transition:all .15s;color:var(--muted);
-  border-left:2px solid transparent;font-size:13px;font-weight:500;
-  user-select:none;
-}
-.nav-item:hover{color:var(--text);background:var(--surface2)}
-.nav-item.active{
-  color:var(--amber);border-left-color:var(--amber);
-  background:var(--amber-glow);
-}
-.nav-icon{font-size:14px;width:16px;text-align:center;flex-shrink:0}
-.sb-status{
-  padding:12px 16px;border-top:1px solid var(--border);
-  display:flex;align-items:center;gap:8px;
-}
-.status-dot{
-  width:7px;height:7px;border-radius:50%;background:var(--ok);flex-shrink:0;
-  animation:pulse-dot 2s infinite;
-}
-.status-dot.stale{background:var(--bad);animation:none}
-@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.4}}
-.sb-time{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted)}
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0
+    }
 
-/* ── MAIN ── */
-.main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden}
-.topbar{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:10px 20px;border-bottom:1px solid var(--border);
-  background:var(--surface);position:sticky;top:0;z-index:9;gap:12px;
-}
-.topbar-left{display:flex;align-items:center;gap:8px;min-width:0}
-.breadcrumb{font-size:13px;color:var(--muted);white-space:nowrap}
-.breadcrumb span{color:var(--text);font-weight:600}
-.topbar-right{display:flex;align-items:center;gap:10px;flex-shrink:0}
-.sync-ts{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted)}
-.sync-ts.err{color:var(--bad)}
-.pill{
-  font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;
-  padding:3px 8px;border-radius:4px;display:inline-block;
-}
-.pill-ok{background:var(--ok-glow);color:var(--ok);border:1px solid var(--ok-dim)}
-.pill-bad{background:var(--bad-glow);color:var(--bad);border:1px solid var(--bad-dim)}
-.pill-warn{background:rgba(245,158,11,.12);color:var(--warn);border:1px solid var(--warn-dim)}
-.pill-amber{background:var(--amber-glow);color:var(--amber);border:1px solid var(--amber-dim)}
-.pill-cyan{background:rgba(0,212,255,.1);color:var(--cyan);border:1px solid var(--cyan-dim)}
-.pill-muted{background:var(--surface3);color:var(--muted);border:1px solid var(--border2)}
+    body {
+      font-family: 'Space Grotesk', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      min-height: 100vh;
+      font-size: 14px
+    }
 
-/* ── VIEW CONTAINER ── */
-.views{flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px}
-.views::-webkit-scrollbar{width:5px}
-.views::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
-.view{display:none;flex-direction:column;gap:14px}
-.view.active{display:flex}
+    .mono {
+      font-family: 'JetBrains Mono', monospace
+    }
 
-/* ── STALE BANNER ── */
-.stale-banner{
-  background:var(--bad-glow);border:1px solid var(--bad-dim);border-radius:8px;
-  padding:8px 14px;display:flex;align-items:center;gap:10px;
-  font-size:12px;color:var(--bad);font-weight:500;
-}
-.stale-banner.hidden{display:none}
+    /* ── SIDEBAR ── */
+    .sidebar {
+      width: var(--sidebar-w);
+      min-width: var(--sidebar-w);
+      height: 100vh;
+      position: sticky;
+      top: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow: hidden;
+      z-index: 10;
+      flex-shrink: 0;
+    }
 
-/* ── GRID / CARDS ── */
-.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
-.col-3{grid-column:span 3}
-.col-4{grid-column:span 4}
-.col-6{grid-column:span 6}
-.col-8{grid-column:span 8}
-.col-12{grid-column:span 12}
-.card{
-  background:var(--surface);border:1px solid var(--border);border-radius:10px;
-  padding:14px;position:relative;overflow:hidden;
-  transition:border-color .2s;
-}
-.card:hover{border-color:var(--border2)}
-.card-accent-amber::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--amber);border-radius:3px 0 0 3px}
-.card-accent-cyan::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--cyan);border-radius:3px 0 0 3px}
-.card-accent-ok::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--ok);border-radius:3px 0 0 3px}
-.card-accent-bad::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--bad);border-radius:3px 0 0 3px}
-.card-label{font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
-.kpi-val{
-  font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:600;
-  line-height:1;transition:color .3s;
-}
-.kpi-sub{font-size:11px;color:var(--muted);margin-top:4px;font-family:'JetBrains Mono',monospace}
-.kpi-halted{animation:halted-pulse .8s infinite}
-@keyframes halted-pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    .sb-logo {
+      padding: 18px 16px 14px;
+      border-bottom: 1px solid var(--border)
+    }
 
-/* ── TABLE ── */
-.tbl{width:100%;border-collapse:collapse;font-size:12px}
-.tbl th{color:var(--muted);font-weight:500;text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);font-size:11px;letter-spacing:.04em;white-space:nowrap}
-.tbl td{padding:6px 8px;border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
-.tbl tr:last-child td{border-bottom:none}
-.tbl tr:hover td{background:var(--surface2)}
-.tbl-empty{text-align:center;color:var(--muted);padding:24px;font-size:12px}
+    .sb-logo-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--amber);
+      letter-spacing: .04em
+    }
 
-/* ── TOOLBAR ── */
-.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
-.tb-inp{
-  background:var(--surface2);color:var(--text);border:1px solid var(--border2);
-  border-radius:6px;padding:5px 10px;font-size:12px;font-family:inherit;
-  transition:border-color .15s;outline:none;
-}
-.tb-inp:focus{border-color:var(--amber)}
-.tb-sel{appearance:none;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748b'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;padding-right:24px}
+    .sb-logo-ver {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      margin-top: 2px
+    }
 
-/* ── LOG BOX ── */
-.logbox{
-  max-height:400px;overflow-y:auto;background:var(--surface2);
-  border:1px solid var(--border);border-radius:8px;padding:8px;
-}
-.logbox::-webkit-scrollbar{width:4px}
-.logbox::-webkit-scrollbar-thumb{background:var(--border2)}
-.logline{
-  display:flex;gap:8px;padding:3px 0;border-bottom:1px solid rgba(30,45,61,.5);
-  font-family:'JetBrains Mono',monospace;font-size:11px;
-  animation:fadein .2s ease;
-}
-.logline:last-child{border-bottom:none}
-@keyframes fadein{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}
-.log-ts{color:var(--muted2);flex-shrink:0;width:160px}
-.log-lvl{flex-shrink:0;width:38px;text-align:center;border-radius:3px;font-size:10px;padding:1px 0}
-.log-lvl.error{background:var(--bad-glow);color:var(--bad)}
-.log-lvl.warn{background:rgba(245,158,11,.12);color:var(--warn)}
-.log-lvl.info{background:rgba(0,212,255,.08);color:var(--cyan)}
-.log-lvl.debug{background:var(--surface3);color:var(--muted)}
-.log-msg{color:var(--text);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.log-caller{color:var(--muted2);flex-shrink:0}
+    .sb-nav {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 0
+    }
 
-/* ── PROVIDER CARDS ── */
-.provider-row{
-  display:flex;align-items:center;gap:10px;padding:10px 12px;
-  background:var(--surface2);border:1px solid var(--border);border-radius:8px;
-  margin-bottom:8px;transition:border-color .15s;
-}
-.provider-row:hover{border-color:var(--border2)}
-.prov-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.prov-name{font-weight:600;font-size:13px;flex:1}
-.prov-model{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted)}
-.prov-status{font-size:11px;font-family:'JetBrains Mono',monospace}
-.prov-star{color:var(--amber);font-size:14px}
+    .sb-nav::-webkit-scrollbar {
+      width: 3px
+    }
 
-/* ── ANALYTICS ── */
-.stat-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)}
-.stat-row:last-child{border-bottom:none}
-.stat-label{color:var(--muted);font-size:12px}
-.stat-val{font-family:'JetBrains Mono',monospace;font-weight:600;font-size:13px}
+    .sb-nav::-webkit-scrollbar-thumb {
+      background: var(--border2);
+      border-radius: 2px
+    }
 
-/* ── DIAG SECTIONS ── */
-.diag-section{margin-bottom:10px}
-.diag-title{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--amber);margin-bottom:6px}
-.diag-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
-.diag-item{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px}
-.diag-item-key{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
-.diag-item-val{font-family:'JetBrains Mono',monospace;font-size:12px;margin-top:2px}
+    .nav-group {
+      margin-bottom: 4px
+    }
 
-/* ── CHART ── */
-#equityChart{width:100%;height:280px;border-radius:6px;overflow:hidden}
+    .nav-group-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--muted2);
+      padding: 8px 16px 4px;
+    }
 
-/* ── SECTION HEADER ── */
-.sec-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-.sec-title{font-size:13px;font-weight:600;color:var(--text)}
-.sec-meta{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted)}
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 16px;
+      cursor: pointer;
+      transition: all .15s;
+      color: var(--muted);
+      border-left: 2px solid transparent;
+      font-size: 13px;
+      font-weight: 500;
+      user-select: none;
+    }
 
-/* ── MOBILE ── */
-@media(max-width:900px){
-  .sidebar{width:48px;min-width:48px}
-  .sb-logo-name,.sb-logo-ver,.nav-group-label,.nav-item span,.sb-time{display:none}
-  .nav-item{justify-content:center;padding:10px 0}
-  .sb-status{justify-content:center;padding:10px 0}
-  .col-3,.col-4{grid-column:span 6}
-  .col-8{grid-column:span 12}
-}
-@media(max-width:600px){
-  .col-3,.col-4,.col-6,.col-8{grid-column:span 12}
-}
-</style>
+    .nav-item:hover {
+      color: var(--text);
+      background: var(--surface2)
+    }
+
+    .nav-item.active {
+      color: var(--amber);
+      border-left-color: var(--amber);
+      background: var(--amber-glow);
+    }
+
+    .nav-icon {
+      font-size: 14px;
+      width: 16px;
+      text-align: center;
+      flex-shrink: 0
+    }
+
+    .sb-status {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--ok);
+      flex-shrink: 0;
+      animation: pulse-dot 2s infinite;
+    }
+
+    .status-dot.stale {
+      background: var(--bad);
+      animation: none
+    }
+
+    @keyframes pulse-dot {
+
+      0%,
+      100% {
+        opacity: 1
+      }
+
+      50% {
+        opacity: .4
+      }
+    }
+
+    .sb-time {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--muted)
+    }
+
+    /* ── MAIN ── */
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      overflow: hidden
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      position: sticky;
+      top: 0;
+      z-index: 9;
+      gap: 12px;
+    }
+
+    .topbar-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0
+    }
+
+    .breadcrumb {
+      font-size: 13px;
+      color: var(--muted);
+      white-space: nowrap
+    }
+
+    .breadcrumb span {
+      color: var(--text);
+      font-weight: 600
+    }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0
+    }
+
+    .sync-ts {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--muted)
+    }
+
+    .sync-ts.err {
+      color: var(--bad)
+    }
+
+    .pill {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+
+    .pill-ok {
+      background: var(--ok-glow);
+      color: var(--ok);
+      border: 1px solid var(--ok-dim)
+    }
+
+    .pill-bad {
+      background: var(--bad-glow);
+      color: var(--bad);
+      border: 1px solid var(--bad-dim)
+    }
+
+    .pill-warn {
+      background: rgba(245, 158, 11, .12);
+      color: var(--warn);
+      border: 1px solid var(--warn-dim)
+    }
+
+    .pill-amber {
+      background: var(--amber-glow);
+      color: var(--amber);
+      border: 1px solid var(--amber-dim)
+    }
+
+    .pill-cyan {
+      background: rgba(0, 212, 255, .1);
+      color: var(--cyan);
+      border: 1px solid var(--cyan-dim)
+    }
+
+    .pill-muted {
+      background: var(--surface3);
+      color: var(--muted);
+      border: 1px solid var(--border2)
+    }
+
+    /* ── VIEW CONTAINER ── */
+    .views {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px
+    }
+
+    .views::-webkit-scrollbar {
+      width: 5px
+    }
+
+    .views::-webkit-scrollbar-thumb {
+      background: var(--border2);
+      border-radius: 3px
+    }
+
+    .view {
+      display: none;
+      flex-direction: column;
+      gap: 14px
+    }
+
+    .view.active {
+      display: flex
+    }
+
+    /* ── STALE BANNER ── */
+    .stale-banner {
+      background: var(--bad-glow);
+      border: 1px solid var(--bad-dim);
+      border-radius: 8px;
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--bad);
+      font-weight: 500;
+    }
+
+    .stale-banner.hidden {
+      display: none
+    }
+
+    /* ── GRID / CARDS ── */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px
+    }
+
+    .col-3 {
+      grid-column: span 3
+    }
+
+    .col-4 {
+      grid-column: span 4
+    }
+
+    .col-6 {
+      grid-column: span 6
+    }
+
+    .col-8 {
+      grid-column: span 8
+    }
+
+    .col-12 {
+      grid-column: span 12
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color .2s;
+    }
+
+    .card:hover {
+      border-color: var(--border2)
+    }
+
+    .card-accent-amber::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: var(--amber);
+      border-radius: 3px 0 0 3px
+    }
+
+    .card-accent-cyan::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: var(--cyan);
+      border-radius: 3px 0 0 3px
+    }
+
+    .card-accent-ok::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: var(--ok);
+      border-radius: 3px 0 0 3px
+    }
+
+    .card-accent-bad::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: var(--bad);
+      border-radius: 3px 0 0 3px
+    }
+
+    .card-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px
+    }
+
+    .kpi-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 26px;
+      font-weight: 600;
+      line-height: 1;
+      transition: color .3s;
+    }
+
+    .kpi-sub {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+      font-family: 'JetBrains Mono', monospace
+    }
+
+    .kpi-halted {
+      animation: halted-pulse .8s infinite
+    }
+
+    @keyframes halted-pulse {
+
+      0%,
+      100% {
+        opacity: 1
+      }
+
+      50% {
+        opacity: .3
+      }
+    }
+
+    /* ── TABLE ── */
+    .tbl {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px
+    }
+
+    .tbl th {
+      color: var(--muted);
+      font-weight: 500;
+      text-align: left;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      letter-spacing: .04em;
+      white-space: nowrap
+    }
+
+    .tbl td {
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 200px
+    }
+
+    .tbl tr:last-child td {
+      border-bottom: none
+    }
+
+    .tbl tr:hover td {
+      background: var(--surface2)
+    }
+
+    .tbl-empty {
+      text-align: center;
+      color: var(--muted);
+      padding: 24px;
+      font-size: 12px
+    }
+
+    /* ── TOOLBAR ── */
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px
+    }
+
+    .tb-inp {
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-family: inherit;
+      transition: border-color .15s;
+      outline: none;
+    }
+
+    .tb-inp:focus {
+      border-color: var(--amber)
+    }
+
+    .tb-sel {
+      appearance: none;
+      cursor: pointer;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748b'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      padding-right: 24px
+    }
+
+    /* ── LOG BOX ── */
+    .logbox {
+      max-height: 400px;
+      overflow-y: auto;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+    }
+
+    .logbox::-webkit-scrollbar {
+      width: 4px
+    }
+
+    .logbox::-webkit-scrollbar-thumb {
+      background: var(--border2)
+    }
+
+    .logline {
+      display: flex;
+      gap: 8px;
+      padding: 3px 0;
+      border-bottom: 1px solid rgba(30, 45, 61, .5);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      animation: fadein .2s ease;
+    }
+
+    .logline:last-child {
+      border-bottom: none
+    }
+
+    @keyframes fadein {
+      from {
+        opacity: 0;
+        transform: translateY(-2px)
+      }
+
+      to {
+        opacity: 1;
+        transform: none
+      }
+    }
+
+    .log-ts {
+      color: var(--muted2);
+      flex-shrink: 0;
+      width: 160px
+    }
+
+    .log-lvl {
+      flex-shrink: 0;
+      width: 38px;
+      text-align: center;
+      border-radius: 3px;
+      font-size: 10px;
+      padding: 1px 0
+    }
+
+    .log-lvl.error {
+      background: var(--bad-glow);
+      color: var(--bad)
+    }
+
+    .log-lvl.warn {
+      background: rgba(245, 158, 11, .12);
+      color: var(--warn)
+    }
+
+    .log-lvl.info {
+      background: rgba(0, 212, 255, .08);
+      color: var(--cyan)
+    }
+
+    .log-lvl.debug {
+      background: var(--surface3);
+      color: var(--muted)
+    }
+
+    .log-msg {
+      color: var(--text);
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis
+    }
+
+    .log-caller {
+      color: var(--muted2);
+      flex-shrink: 0
+    }
+
+    /* ── PROVIDER CARDS ── */
+    .provider-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      transition: border-color .15s;
+    }
+
+    .provider-row:hover {
+      border-color: var(--border2)
+    }
+
+    .prov-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0
+    }
+
+    .prov-name {
+      font-weight: 600;
+      font-size: 13px;
+      flex: 1
+    }
+
+    .prov-model {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--muted)
+    }
+
+    .prov-status {
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace
+    }
+
+    .prov-star {
+      color: var(--amber);
+      font-size: 14px
+    }
+
+    /* ── ANALYTICS ── */
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border)
+    }
+
+    .stat-row:last-child {
+      border-bottom: none
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: 12px
+    }
+
+    .stat-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      font-size: 13px
+    }
+
+    /* ── DIAG SECTIONS ── */
+    .diag-section {
+      margin-bottom: 10px
+    }
+
+    .diag-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--amber);
+      margin-bottom: 6px
+    }
+
+    .diag-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 8px
+    }
+
+    .diag-item {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px
+    }
+
+    .diag-item-key {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em
+    }
+
+    .diag-item-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      margin-top: 2px
+    }
+
+    /* ── CHART ── */
+    #equityChart {
+      width: 100%;
+      height: 280px;
+      border-radius: 6px;
+      overflow: hidden
+    }
+
+    /* ── SECTION HEADER ── */
+    .sec-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px
+    }
+
+    .sec-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text)
+    }
+
+    .sec-meta {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--muted)
+    }
+
+    /* ── MOBILE ── */
+    @media(max-width:900px) {
+      .sidebar {
+        width: 48px;
+        min-width: 48px
+      }
+
+      .sb-logo-name,
+      .sb-logo-ver,
+      .nav-group-label,
+      .nav-item span,
+      .sb-time {
+        display: none
+      }
+
+      .nav-item {
+        justify-content: center;
+        padding: 10px 0
+      }
+
+      .sb-status {
+        justify-content: center;
+        padding: 10px 0
+      }
+
+      .col-3,
+      .col-4 {
+        grid-column: span 6
+      }
+
+      .col-8 {
+        grid-column: span 12
+      }
+    }
+
+    @media(max-width:600px) {
+
+      .col-3,
+      .col-4,
+      .col-6,
+      .col-8 {
+        grid-column: span 12
+      }
+    }
+  </style>
 </head>
+
 <body>
 
-<!-- ── SIDEBAR ── -->
-<aside class="sidebar">
-  <div class="sb-logo">
-    <div class="sb-logo-name">PHANTOMCLAW</div>
-    <div class="sb-logo-ver">v4.0.0 · Control Deck</div>
-  </div>
-  <nav class="sb-nav">
-    <div class="nav-group">
-      <div class="nav-group-label">Overview</div>
-      <div class="nav-item active" data-view="deck">
-        <span class="nav-icon">◈</span><span>Control Deck</span>
-      </div>
+  <!-- ── SIDEBAR ── -->
+  <aside class="sidebar">
+    <div class="sb-logo">
+      <div class="sb-logo-name">PHANTOMCLAW</div>
+      <div class="sb-logo-ver">v4.1.0 · Control Deck</div>
     </div>
-    <div class="nav-group">
-      <div class="nav-group-label">Trading</div>
-      <div class="nav-item" data-view="equity">
-        <span class="nav-icon">◇</span><span>Equity Curve</span>
-      </div>
-      <div class="nav-item" data-view="decisions">
-        <span class="nav-icon">◉</span><span>Decisions</span>
-      </div>
-      <div class="nav-item" data-view="analytics">
-        <span class="nav-icon">◎</span><span>Analytics</span>
-      </div>
-    </div>
-    <div class="nav-group">
-      <div class="nav-group-label">System</div>
-      <div class="nav-item" data-view="providers">
-        <span class="nav-icon">◐</span><span>Providers</span>
-      </div>
-      <div class="nav-item" data-view="diagnostics">
-        <span class="nav-icon">◑</span><span>Diagnostics</span>
-      </div>
-    </div>
-    <div class="nav-group">
-      <div class="nav-group-label">Logs</div>
-      <div class="nav-item" data-view="logs">
-        <span class="nav-icon">▸</span><span>Live Logs</span>
-      </div>
-    </div>
-  </nav>
-  <div class="sb-status">
-    <div class="status-dot" id="sbDot"></div>
-    <div class="sb-time mono" id="sbClock">--:--:--</div>
-  </div>
-</aside>
-
-<!-- ── MAIN ── -->
-<div class="main">
-  <div class="topbar">
-    <div class="topbar-left">
-      <div class="breadcrumb">PhantomClaw / <span id="viewLabel">Control Deck</span></div>
-    </div>
-    <div class="topbar-right">
-      <span id="streamPill" class="pill pill-warn">POLL</span>
-      <span id="modePill" class="pill pill-muted">—</span>
-      <span id="sessionPill" class="pill pill-muted">—</span>
-      <span id="syncTs" class="sync-ts">syncing…</span>
-    </div>
-  </div>
-
-  <div class="views">
-
-    <!-- ░░ STALE BANNER (shared) ░░ -->
-    <div class="stale-banner hidden" id="staleBanner">
-      ⚠ EA Disconnected — no signal received for <span id="staleAge">—</span>
-    </div>
-
-    <!-- ░░ VIEW: CONTROL DECK ░░ -->
-    <div class="view active" id="view-deck">
-      <!-- KPI Row -->
-      <div class="grid">
-        <div class="card card-accent-amber col-3">
-          <div class="card-label">Mode</div>
-          <div class="kpi-val" id="kpiMode">—</div>
-          <div class="kpi-sub" id="kpiModeHalted"></div>
-        </div>
-        <div class="card card-accent-cyan col-3">
-          <div class="card-label">Session</div>
-          <div class="kpi-val" id="kpiSession">—</div>
-        </div>
-        <div class="card card-accent-ok col-3">
-          <div class="card-label">Open Positions</div>
-          <div class="kpi-val" id="kpiPositions">—</div>
-          <div class="kpi-sub" id="kpiPositionsSub"></div>
-        </div>
-        <div class="card col-3" id="kpiLossCard">
-          <div class="card-label">Daily P&amp;L</div>
-          <div class="kpi-val" id="kpiLoss">—</div>
-          <div class="kpi-sub" id="kpiLossSub"></div>
+    <nav class="sb-nav">
+      <div class="nav-group">
+        <div class="nav-group-label">Overview</div>
+        <div class="nav-item active" data-view="deck">
+          <span class="nav-icon">◈</span><span>Control Deck</span>
         </div>
       </div>
+      <div class="nav-group">
+        <div class="nav-group-label">Trading</div>
+        <div class="nav-item" data-view="equity">
+          <span class="nav-icon">◇</span><span>Equity Curve</span>
+        </div>
+        <div class="nav-item" data-view="decisions">
+          <span class="nav-icon">◉</span><span>Decisions</span>
+        </div>
+        <div class="nav-item" data-view="analytics">
+          <span class="nav-icon">◎</span><span>Analytics</span>
+        </div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-label">System</div>
+        <div class="nav-item" data-view="providers">
+          <span class="nav-icon">◐</span><span>Providers</span>
+        </div>
+        <div class="nav-item" data-view="diagnostics">
+          <span class="nav-icon">◑</span><span>Diagnostics</span>
+        </div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-label">Logs</div>
+        <div class="nav-item" data-view="logs">
+          <span class="nav-icon">▸</span><span>Live Logs</span>
+        </div>
+      </div>
+    </nav>
+    <div class="sb-status">
+      <div class="status-dot" id="sbDot"></div>
+      <div class="sb-time mono" id="sbClock">--:--:--</div>
+    </div>
+  </aside>
 
-      <!-- Equity + Providers -->
-      <div class="grid">
-        <div class="card col-8">
-          <div class="sec-header">
-            <div class="sec-title">Equity Curve</div>
-            <div class="sec-meta" id="deckEquityMeta">30d</div>
+  <!-- ── MAIN ── -->
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="breadcrumb">PhantomClaw / <span id="viewLabel">Control Deck</span></div>
+      </div>
+      <div class="topbar-right">
+        <span id="streamPill" class="pill pill-warn">POLL</span>
+        <span id="modePill" class="pill pill-muted">—</span>
+        <span id="sessionPill" class="pill pill-muted">—</span>
+        <span id="syncTs" class="sync-ts">syncing…</span>
+      </div>
+    </div>
+
+    <div class="views">
+
+      <!-- ░░ STALE BANNER (shared) ░░ -->
+      <div class="stale-banner hidden" id="staleBanner">
+        ⚠ EA Disconnected — no signal received for <span id="staleAge">—</span>
+      </div>
+
+      <!-- ░░ VIEW: CONTROL DECK ░░ -->
+      <div class="view active" id="view-deck">
+        <!-- KPI Row -->
+        <div class="grid">
+          <div class="card card-accent-amber col-3">
+            <div class="card-label">Mode</div>
+            <div class="kpi-val" id="kpiMode">—</div>
+            <div class="kpi-sub" id="kpiModeHalted"></div>
           </div>
-          <div id="equityChart"></div>
-        </div>
-        <div class="card col-4">
-          <div class="sec-header">
-            <div class="sec-title">LLM Providers</div>
+          <div class="card card-accent-cyan col-3">
+            <div class="card-label">Session</div>
+            <div class="kpi-val" id="kpiSession">—</div>
           </div>
-          <div id="deckProviders"><div class="tbl-empty">Loading…</div></div>
+          <div class="card card-accent-ok col-3">
+            <div class="card-label">Open Positions</div>
+            <div class="kpi-val" id="kpiPositions">—</div>
+            <div class="kpi-sub" id="kpiPositionsSub"></div>
+          </div>
+          <div class="card col-3" id="kpiLossCard">
+            <div class="card-label">Daily P&amp;L</div>
+            <div class="kpi-val" id="kpiLoss">—</div>
+            <div class="kpi-sub" id="kpiLossSub"></div>
+          </div>
+        </div>
+
+        <!-- Equity + Providers -->
+        <div class="grid">
+          <div class="card col-8">
+            <div class="sec-header">
+              <div class="sec-title">Equity Curve</div>
+              <div class="sec-meta" id="deckEquityMeta">30d</div>
+            </div>
+            <div id="equityChart"></div>
+          </div>
+          <div class="card col-4">
+            <div class="sec-header">
+              <div class="sec-title">LLM Providers</div>
+            </div>
+            <div id="deckProviders">
+              <div class="tbl-empty">Loading…</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Analytics mini + Decisions mini -->
+        <div class="grid">
+          <div class="card col-4">
+            <div class="sec-header">
+              <div class="sec-title">Trade Analytics</div>
+              <div class="sec-meta" id="deckAnalyticsMeta">30d</div>
+            </div>
+            <div id="deckAnalytics"></div>
+          </div>
+          <div class="card col-8">
+            <div class="sec-header">
+              <div class="sec-title">Recent Decisions</div>
+            </div>
+            <div class="toolbar">
+              <input class="tb-inp" id="deckSymbol" placeholder="Symbol filter…" style="width:160px" />
+            </div>
+            <div style="overflow-x:auto">
+              <table class="tbl">
+                <thead>
+                  <tr>
+                    <th>Updated</th>
+                    <th>Symbol</th>
+                    <th>Action</th>
+                    <th>Status</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody id="deckDecisionRows">
+                  <tr>
+                    <td colspan="5" class="tbl-empty">Loading…</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- Analytics mini + Decisions mini -->
-      <div class="grid">
-        <div class="card col-4">
-          <div class="sec-header"><div class="sec-title">Trade Analytics</div><div class="sec-meta" id="deckAnalyticsMeta">30d</div></div>
-          <div id="deckAnalytics"></div>
+      <!-- ░░ VIEW: EQUITY CURVE ░░ -->
+      <div class="view" id="view-equity">
+        <div class="card col-12">
+          <div class="sec-header">
+            <div class="sec-title">Cumulative P&amp;L — Equity Curve</div>
+            <div style="display:flex;gap:8px">
+              <select class="tb-inp tb-sel" id="equityDays">
+                <option value="7">7 days</option>
+                <option value="30" selected>30 days</option>
+                <option value="90">90 days</option>
+                <option value="365">365 days</option>
+              </select>
+            </div>
+          </div>
+          <div id="equityChartFull" style="height:420px;border-radius:6px;overflow:hidden"></div>
         </div>
-        <div class="card col-8">
-          <div class="sec-header"><div class="sec-title">Recent Decisions</div></div>
+      </div>
+
+      <!-- ░░ VIEW: DECISIONS ░░ -->
+      <div class="view" id="view-decisions">
+        <div class="card">
+          <div class="sec-header">
+            <div class="sec-title">Decision History</div>
+          </div>
           <div class="toolbar">
-            <input class="tb-inp" id="deckSymbol" placeholder="Symbol filter…" style="width:160px"/>
-          </div>
-          <div style="overflow-x:auto">
-            <table class="tbl"><thead><tr>
-              <th>Updated</th><th>Symbol</th><th>Action</th><th>Status</th><th>Reason</th>
-            </tr></thead><tbody id="deckDecisionRows"><tr><td colspan="5" class="tbl-empty">Loading…</td></tr></tbody></table>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ░░ VIEW: EQUITY CURVE ░░ -->
-    <div class="view" id="view-equity">
-      <div class="card col-12">
-        <div class="sec-header">
-          <div class="sec-title">Cumulative P&amp;L — Equity Curve</div>
-          <div style="display:flex;gap:8px">
-            <select class="tb-inp tb-sel" id="equityDays">
-              <option value="7">7 days</option>
-              <option value="30" selected>30 days</option>
-              <option value="90">90 days</option>
-              <option value="365">365 days</option>
+            <input class="tb-inp" id="decSymbol" placeholder="Symbol e.g. XAUUSD" style="width:180px" />
+            <select class="tb-inp tb-sel" id="decLimit">
+              <option value="50">50 rows</option>
+              <option value="200" selected>200 rows</option>
+              <option value="500">500 rows</option>
             </select>
           </div>
-        </div>
-        <div id="equityChartFull" style="height:420px;border-radius:6px;overflow:hidden"></div>
-      </div>
-    </div>
-
-    <!-- ░░ VIEW: DECISIONS ░░ -->
-    <div class="view" id="view-decisions">
-      <div class="card">
-        <div class="sec-header"><div class="sec-title">Decision History</div></div>
-        <div class="toolbar">
-          <input class="tb-inp" id="decSymbol" placeholder="Symbol e.g. XAUUSD" style="width:180px"/>
-          <select class="tb-inp tb-sel" id="decLimit">
-            <option value="50">50 rows</option>
-            <option value="200" selected>200 rows</option>
-            <option value="500">500 rows</option>
-          </select>
-        </div>
-        <div style="overflow-x:auto">
-          <table class="tbl"><thead><tr>
-            <th>Updated</th><th>Req ID</th><th>Symbol</th><th>Action</th><th>Status</th><th>Reason</th>
-          </tr></thead><tbody id="decisionRows"><tr><td colspan="6" class="tbl-empty">Loading…</td></tr></tbody></table>
+          <div style="overflow-x:auto">
+            <table class="tbl">
+              <thead>
+                <tr>
+                  <th>Updated</th>
+                  <th>Req ID</th>
+                  <th>Symbol</th>
+                  <th>Action</th>
+                  <th>Status</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody id="decisionRows">
+                <tr>
+                  <td colspan="6" class="tbl-empty">Loading…</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- ░░ VIEW: ANALYTICS ░░ -->
-    <div class="view" id="view-analytics">
-      <div class="grid">
-        <div class="card col-4">
-          <div class="sec-header"><div class="sec-title">Summary</div><div class="sec-meta" id="analyticsMeta">30d</div></div>
-          <div id="analyticsSummary"></div>
+      <!-- ░░ VIEW: ANALYTICS ░░ -->
+      <div class="view" id="view-analytics">
+        <div class="grid">
+          <div class="card col-4">
+            <div class="sec-header">
+              <div class="sec-title">Summary</div>
+              <div class="sec-meta" id="analyticsMeta">30d</div>
+            </div>
+            <div id="analyticsSummary"></div>
+          </div>
+          <div class="card col-8">
+            <div class="sec-header">
+              <div class="sec-title">Per-Pair Breakdown</div>
+              <select class="tb-inp tb-sel" id="analyticsDays">
+                <option value="7">7 days</option>
+                <option value="30" selected>30 days</option>
+                <option value="90">90 days</option>
+              </select>
+            </div>
+            <div style="overflow-x:auto">
+              <table class="tbl">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Trades</th>
+                    <th>Win Rate</th>
+                    <th>Total P&amp;L</th>
+                    <th>Avg P&amp;L</th>
+                  </tr>
+                </thead>
+                <tbody id="analyticsRows">
+                  <tr>
+                    <td colspan="5" class="tbl-empty">Loading…</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
-        <div class="card col-8">
+      </div>
+
+      <!-- ░░ VIEW: PROVIDERS ░░ -->
+      <div class="view" id="view-providers">
+        <div class="card">
           <div class="sec-header">
-            <div class="sec-title">Per-Pair Breakdown</div>
-            <select class="tb-inp tb-sel" id="analyticsDays">
-              <option value="7">7 days</option>
-              <option value="30" selected>30 days</option>
-              <option value="90">90 days</option>
+            <div class="sec-title">LLM Provider Status</div>
+          </div>
+          <div class="toolbar">
+            <select class="tb-inp tb-sel" id="modelSwitchSel"></select>
+            <button class="tb-inp" id="modelSwitchBtn" type="button">Switch Primary</button>
+            <span class="sec-meta" id="modelSwitchMsg"></span>
+          </div>
+          <div id="providersDetail">
+            <div class="tbl-empty">Loading…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ░░ VIEW: DIAGNOSTICS ░░ -->
+      <div class="view" id="view-diagnostics">
+        <div class="card">
+          <div class="sec-header">
+            <div class="sec-title">System Diagnostics</div>
+          </div>
+          <div id="diagContent">
+            <div class="tbl-empty">Loading…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ░░ VIEW: LOGS ░░ -->
+      <div class="view" id="view-logs">
+        <div class="card">
+          <div class="sec-header">
+            <div class="sec-title">Live Logs</div>
+          </div>
+          <div class="toolbar">
+            <select class="tb-inp tb-sel" id="logLevel">
+              <option value="">All levels</option>
+              <option value="debug">DEBUG</option>
+              <option value="info">INFO</option>
+              <option value="warn">WARN</option>
+              <option value="error">ERROR</option>
             </select>
+            <input class="tb-inp" id="logComponent" placeholder="Component…" style="width:140px" />
+            <input class="tb-inp" id="logContains" placeholder="Message contains…" style="width:180px" />
+            <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)">
+              <input type="checkbox" id="logAutoScroll" checked /> Auto-scroll
+            </label>
           </div>
-          <div style="overflow-x:auto">
-            <table class="tbl"><thead><tr>
-              <th>Symbol</th><th>Trades</th><th>Win Rate</th><th>Total P&amp;L</th><th>Avg P&amp;L</th>
-            </tr></thead><tbody id="analyticsRows"><tr><td colspan="5" class="tbl-empty">Loading…</td></tr></tbody></table>
-          </div>
+          <div class="logbox" id="logs"></div>
         </div>
       </div>
-    </div>
 
-    <!-- ░░ VIEW: PROVIDERS ░░ -->
-    <div class="view" id="view-providers">
-      <div class="card">
-        <div class="sec-header"><div class="sec-title">LLM Provider Status</div></div>
-        <div class="toolbar">
-          <select class="tb-inp tb-sel" id="modelSwitchSel"></select>
-          <button class="tb-inp" id="modelSwitchBtn" type="button">Switch Primary</button>
-          <span class="sec-meta" id="modelSwitchMsg"></span>
-        </div>
-        <div id="providersDetail"><div class="tbl-empty">Loading…</div></div>
-      </div>
-    </div>
+    </div><!-- /views -->
+  </div><!-- /main -->
 
-    <!-- ░░ VIEW: DIAGNOSTICS ░░ -->
-    <div class="view" id="view-diagnostics">
-      <div class="card">
-        <div class="sec-header"><div class="sec-title">System Diagnostics</div></div>
-        <div id="diagContent"><div class="tbl-empty">Loading…</div></div>
-      </div>
-    </div>
+  <script>
+    'use strict';
 
-    <!-- ░░ VIEW: LOGS ░░ -->
-    <div class="view" id="view-logs">
-      <div class="card">
-        <div class="sec-header"><div class="sec-title">Live Logs</div></div>
-        <div class="toolbar">
-          <select class="tb-inp tb-sel" id="logLevel">
-            <option value="">All levels</option>
-            <option value="debug">DEBUG</option>
-            <option value="info">INFO</option>
-            <option value="warn">WARN</option>
-            <option value="error">ERROR</option>
-          </select>
-          <input class="tb-inp" id="logComponent" placeholder="Component…" style="width:140px"/>
-          <input class="tb-inp" id="logContains" placeholder="Message contains…" style="width:180px"/>
-          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)">
-            <input type="checkbox" id="logAutoScroll" checked/> Auto-scroll
-          </label>
-        </div>
-        <div class="logbox" id="logs"></div>
-      </div>
-    </div>
+    // ── helpers ──────────────────────────────────────────────────────────
+    const $ = id => document.getElementById(id);
+    const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const fmtPnl = v => (v >= 0 ? '+' : '') + v.toFixed(2);
+    const fmtPct = v => (v * 100).toFixed(1) + '%';
 
-  </div><!-- /views -->
-</div><!-- /main -->
+    async function api(url) {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`${url} → ${r.status}`);
+      return r.json();
+    }
 
-<script>
-'use strict';
+    // ── STATE ─────────────────────────────────────────────────────────────
+    let lastLogTs = '', pollTimer = null, nonStreamTimer = null, evtSource = null, streamLive = false, snapData = {}, diagData = {};
+    let equityChart = null, equityChartFull = null, equitySeries = null, equitySeriesFull = null;
 
-// ── helpers ──────────────────────────────────────────────────────────
-const $ = id => document.getElementById(id);
-const esc = v => String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-const fmtPnl = v => (v>=0?'+':'')+v.toFixed(2);
-const fmtPct = v => (v*100).toFixed(1)+'%';
+    // ── NAVIGATION ────────────────────────────────────────────────────────
+    const VIEW_LABELS = {
+      deck: 'Control Deck', equity: 'Equity Curve', decisions: 'Decisions',
+      analytics: 'Analytics', providers: 'Providers', diagnostics: 'Diagnostics', logs: 'Live Logs'
+    };
 
-async function api(url){
-  const r = await fetch(url,{cache:'no-store'});
-  if(!r.ok) throw new Error(`${url} → ${r.status}`);
-  return r.json();
-}
+    function navigate(viewId) {
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      const v = $('view-' + viewId);
+      if (v) v.classList.add('active');
+      document.querySelectorAll(`.nav-item[data-view="${viewId}"]`).forEach(n => n.classList.add('active'));
+      $('viewLabel').textContent = VIEW_LABELS[viewId] || viewId;
+      window.location.hash = viewId;
+      // Init charts on first show
+      if (viewId === 'equity' && !equityChartFull) initEquityChartFull();
+      if (viewId === 'analytics') loadAnalytics($('analyticsDays').value);
+      if (viewId === 'decisions') loadDecisions();
+      if (viewId === 'diagnostics') renderDiagnostics(diagData);
+      if (viewId === 'providers') renderProvidersDetail(diagData);
+    }
 
-// ── STATE ─────────────────────────────────────────────────────────────
-let lastLogTs='', pollTimer=null, nonStreamTimer=null, evtSource=null, streamLive=false, snapData={}, diagData={};
-let equityChart=null, equityChartFull=null, equitySeries=null, equitySeriesFull=null;
+    document.querySelectorAll('.nav-item').forEach(n => {
+      n.addEventListener('click', () => navigate(n.dataset.view));
+    });
 
-// ── NAVIGATION ────────────────────────────────────────────────────────
-const VIEW_LABELS = {
-  deck:'Control Deck', equity:'Equity Curve', decisions:'Decisions',
-  analytics:'Analytics', providers:'Providers', diagnostics:'Diagnostics', logs:'Live Logs'
-};
+    // ── CLOCK ─────────────────────────────────────────────────────────────
+    setInterval(() => {
+      $('sbClock').textContent = new Date().toLocaleTimeString('en-GB');
+    }, 1000);
 
-function navigate(viewId){
-  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
-  const v = $('view-'+viewId);
-  if(v) v.classList.add('active');
-  document.querySelectorAll(`.nav-item[data-view="${viewId}"]`).forEach(n=>n.classList.add('active'));
-  $('viewLabel').textContent = VIEW_LABELS[viewId]||viewId;
-  window.location.hash = viewId;
-  // Init charts on first show
-  if(viewId==='equity' && !equityChartFull) initEquityChartFull();
-  if(viewId==='analytics') loadAnalytics($('analyticsDays').value);
-  if(viewId==='decisions') loadDecisions();
-  if(viewId==='diagnostics') renderDiagnostics(diagData);
-  if(viewId==='providers') renderProvidersDetail(diagData);
-}
+    // ── BADGES / PILLS ────────────────────────────────────────────────────
+    function modePillClass(mode) {
+      const m = (mode || '').toUpperCase();
+      if (m === 'HALT') return 'pill-bad';
+      if (m === 'AUTO') return 'pill-ok';
+      if (m === 'SUGGEST') return 'pill-cyan';
+      return 'pill-muted';
+    }
+    function actionBadge(action) {
+      const a = (action || '').toUpperCase();
+      const cls = a.includes('BUY') || a === 'PLACE_PENDING' ? 'pill-ok' :
+        a.includes('SELL') || a === 'MARKET_CLOSE' ? 'pill-bad' :
+          a === 'HOLD' ? 'pill-muted' : 'pill-amber';
+      return `<span class="pill ${cls}" style="font-size:10px">${esc(a)}</span>`;
+    }
+    function statusBadge(status) {
+      const s = (status || '').toLowerCase();
+      const cls = s === 'consumed' ? 'pill-ok' : s === 'expired' || s === 'error' ? 'pill-bad' : s === 'delivered' ? 'pill-cyan' : 'pill-muted';
+      return `<span class="pill ${cls}" style="font-size:10px">${esc(status)}</span>`;
+    }
+    function provDot(status) {
+      if (!status || status === 'healthy') return 'var(--ok)';
+      if (status.startsWith('cooldown')) return 'var(--warn)';
+      if (status.startsWith('degraded')) return 'var(--bad)';
+      return 'var(--muted)';
+    }
 
-document.querySelectorAll('.nav-item').forEach(n=>{
-  n.addEventListener('click',()=>navigate(n.dataset.view));
-});
+    function setStreamPill(mode) {
+      const el = $('streamPill');
+      if (!el) return;
+      const upper = (mode || 'POLL').toUpperCase();
+      if (upper === 'SSE') {
+        el.className = 'pill pill-cyan';
+      } else if (upper === 'RETRY') {
+        el.className = 'pill pill-amber';
+      } else {
+        el.className = 'pill pill-warn';
+      }
+      el.textContent = upper;
+    }
 
-// ── CLOCK ─────────────────────────────────────────────────────────────
-setInterval(()=>{
-  $('sbClock').textContent = new Date().toLocaleTimeString('en-GB');
-},1000);
+    // ── SNAPSHOT ──────────────────────────────────────────────────────────
+    function renderSnapshot(d) {
+      snapData = d || {};
 
-// ── BADGES / PILLS ────────────────────────────────────────────────────
-function modePillClass(mode){
-  const m=(mode||'').toUpperCase();
-  if(m==='HALT') return 'pill-bad';
-  if(m==='AUTO') return 'pill-ok';
-  if(m==='SUGGEST') return 'pill-cyan';
-  return 'pill-muted';
-}
-function actionBadge(action){
-  const a=(action||'').toUpperCase();
-  const cls = a.includes('BUY')||a==='PLACE_PENDING'?'pill-ok':
-               a.includes('SELL')||a==='MARKET_CLOSE'?'pill-bad':
-               a==='HOLD'?'pill-muted':'pill-amber';
-  return `<span class="pill ${cls}" style="font-size:10px">${esc(a)}</span>`;
-}
-function statusBadge(status){
-  const s=(status||'').toLowerCase();
-  const cls=s==='consumed'?'pill-ok':s==='expired'||s==='error'?'pill-bad':s==='delivered'?'pill-cyan':'pill-muted';
-  return `<span class="pill ${cls}" style="font-size:10px">${esc(status)}</span>`;
-}
-function provDot(status){
-  if(!status||status==='healthy') return 'var(--ok)';
-  if(status.startsWith('cooldown')) return 'var(--warn)';
-  if(status.startsWith('degraded')) return 'var(--bad)';
-  return 'var(--muted)';
-}
+      // Mode
+      const mode = (d.mode || '—').toUpperCase();
+      $('kpiMode').textContent = mode;
+      $('kpiMode').className = 'kpi-val';
+      if (d.halted) { $('kpiMode').classList.add('kpi-halted'); $('kpiModeHalted').textContent = 'HALTED'; }
+      else $('kpiModeHalted').textContent = '';
 
-function setStreamPill(mode){
-  const el=$('streamPill');
-  if(!el) return;
-  const upper=(mode||'POLL').toUpperCase();
-  if(upper==='SSE'){
-    el.className='pill pill-cyan';
-  }else if(upper==='RETRY'){
-    el.className='pill pill-amber';
-  }else{
-    el.className='pill pill-warn';
-  }
-  el.textContent=upper;
-}
+      const mp = $('modePill'); mp.textContent = mode; mp.className = 'pill ' + modePillClass(mode);
+      const sp = $('sessionPill'); sp.textContent = (d.session || '—').toUpperCase();
+      sp.className = 'pill ' + (['LONDON', 'NY_OVERLAP'].includes((d.session || '').toUpperCase()) ? 'pill-amber' : 'pill-muted');
 
-// ── SNAPSHOT ──────────────────────────────────────────────────────────
-function renderSnapshot(d){
-  snapData = d||{};
+      // Session KPI
+      $('kpiSession').textContent = (d.session || '—').toUpperCase();
 
-  // Mode
-  const mode = (d.mode||'—').toUpperCase();
-  $('kpiMode').textContent = mode;
-  $('kpiMode').className = 'kpi-val';
-  if(d.halted) { $('kpiMode').classList.add('kpi-halted'); $('kpiModeHalted').textContent='HALTED'; }
-  else $('kpiModeHalted').textContent='';
+      // Positions
+      const pos = d.open_positions ?? 0, maxPos = d.max_positions ?? '—';
+      $('kpiPositions').textContent = pos + '/' + maxPos;
+      $('kpiPositions').style.color = maxPos && pos >= maxPos ? 'var(--bad)' : pos > 0 ? 'var(--warn)' : 'var(--ok)';
+      $('kpiPositionsSub').textContent = 'max ' + (maxPos || '—') + ' pos';
 
-  const mp=$('modePill'); mp.textContent=mode; mp.className='pill '+modePillClass(mode);
-  const sp=$('sessionPill'); sp.textContent=(d.session||'—').toUpperCase();
-  sp.className='pill '+(['LONDON','NY_OVERLAP'].includes((d.session||'').toUpperCase())?'pill-amber':'pill-muted');
+      // Daily Loss — thresholds from config
+      const loss = d.daily_loss ?? 0, maxLoss = d.max_daily_loss;
+      const lossPct = maxLoss > 0 ? Math.abs(loss) / maxLoss : 0;
+      const lossColor = lossPct >= 0.8 ? 'var(--bad)' : lossPct >= 0.5 ? 'var(--warn)' : 'var(--ok)';
+      $('kpiLoss').textContent = '$' + fmtPnl(loss);
+      $('kpiLoss').style.color = lossColor;
+      $('kpiLossSub').textContent = maxLoss ? `limit $${maxLoss.toFixed(0)} · ${(lossPct * 100).toFixed(0)}% used` : '';
+      $('kpiLossCard').classList.toggle('card-accent-bad', lossPct >= 0.8);
+      $('kpiLossCard').classList.toggle('card-accent-amber', lossPct >= 0.5 && lossPct < 0.8);
+      $('kpiLossCard').classList.toggle('card-accent-ok', lossPct < 0.5);
 
-  // Session KPI
-  $('kpiSession').textContent=(d.session||'—').toUpperCase();
+      // EA stale
+      const lst = d.last_signal_time;
+      if (lst) {
+        const age = Math.round((Date.now() - new Date(lst).getTime()) / 1000);
+        const stale60 = age > 60, stale300 = age > 300;
+        $('staleBanner').classList.toggle('hidden', !stale60);
+        if (stale60) $('staleAge').textContent = age > 3600 ? Math.round(age / 3600) + 'h' : age > 60 ? Math.round(age / 60) + 'm' : age + 's';
+        $('sbDot').className = 'status-dot' + (stale300 ? ' stale' : '');
+      }
+    }
 
-  // Positions
-  const pos=d.open_positions??0, maxPos=d.max_positions??'—';
-  $('kpiPositions').textContent=pos+'/'+maxPos;
-  $('kpiPositions').style.color=maxPos&&pos>=maxPos?'var(--bad)':pos>0?'var(--warn)':'var(--ok)';
-  $('kpiPositionsSub').textContent='max '+(maxPos||'—')+' pos';
+    // ── EQUITY CHART ──────────────────────────────────────────────────────
+    function buildEquityPoints(points) {
+      return (points || []).map(p => ({ time: p.time.substring(0, 10) || p.time, value: p.value }));
+    }
 
-  // Daily Loss — thresholds from config
-  const loss=d.daily_loss??0, maxLoss=d.max_daily_loss;
-  const lossPct = maxLoss>0 ? Math.abs(loss)/maxLoss : 0;
-  const lossColor = lossPct>=0.8?'var(--bad)':lossPct>=0.5?'var(--warn)':'var(--ok)';
-  $('kpiLoss').textContent='$'+fmtPnl(loss);
-  $('kpiLoss').style.color=lossColor;
-  $('kpiLossSub').textContent= maxLoss?`limit $${maxLoss.toFixed(0)} · ${(lossPct*100).toFixed(0)}% used`:'';
-  $('kpiLossCard').classList.toggle('card-accent-bad', lossPct>=0.8);
-  $('kpiLossCard').classList.toggle('card-accent-amber', lossPct>=0.5&&lossPct<0.8);
-  $('kpiLossCard').classList.toggle('card-accent-ok', lossPct<0.5);
+    function createChart(el, height) {
+      return LightweightCharts.createChart(el, {
+        width: el.clientWidth || 600, height,
+        layout: { background: { color: 'transparent' }, textColor: '#64748b' },
+        grid: { vertLines: { color: '#1e2d3d' }, horzLines: { color: '#1e2d3d' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: '#1e2d3d' },
+        timeScale: { borderColor: '#1e2d3d', timeVisible: true, secondsVisible: false },
+      });
+    }
 
-  // EA stale
-  const lst=d.last_signal_time;
-  if(lst){
-    const age=Math.round((Date.now()-new Date(lst).getTime())/1000);
-    const stale60=age>60, stale300=age>300;
-    $('staleBanner').classList.toggle('hidden',!stale60);
-    if(stale60) $('staleAge').textContent=age>3600?Math.round(age/3600)+'h':age>60?Math.round(age/60)+'m':age+'s';
-    $('sbDot').className='status-dot'+(stale300?' stale':'');
-  }
-}
+    function addAreaSeries(chart) {
+      return chart.addAreaSeries({
+        lineColor: '#00d4ff',
+        topColor: 'rgba(0,212,255,0.25)',
+        bottomColor: 'rgba(0,212,255,0.02)',
+        lineWidth: 2,
+        crosshairMarkerVisible: true,
+      });
+    }
 
-// ── EQUITY CHART ──────────────────────────────────────────────────────
-function buildEquityPoints(points){
-  return (points||[]).map(p=>({time:p.time.substring(0,10)||p.time, value:p.value}));
-}
+    function initEquityChart() {
+      const el = $('equityChart');
+      if (!el || equityChart) return;
+      equityChart = createChart(el, 280);
+      equitySeries = addAreaSeries(equityChart);
+      new ResizeObserver(() => equityChart.applyOptions({ width: el.clientWidth })).observe(el);
+    }
 
-function createChart(el, height){
-  return LightweightCharts.createChart(el,{
-    width:el.clientWidth||600, height,
-    layout:{background:{color:'transparent'},textColor:'#64748b'},
-    grid:{vertLines:{color:'#1e2d3d'},horzLines:{color:'#1e2d3d'}},
-    crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
-    rightPriceScale:{borderColor:'#1e2d3d'},
-    timeScale:{borderColor:'#1e2d3d',timeVisible:true,secondsVisible:false},
-  });
-}
+    function initEquityChartFull() {
+      const el = $('equityChartFull');
+      if (!el) return;
+      equityChartFull = createChart(el, 420);
+      equitySeriesFull = addAreaSeries(equityChartFull);
+      new ResizeObserver(() => equityChartFull.applyOptions({ width: el.clientWidth })).observe(el);
+      loadEquityFull($('equityDays').value);
+    }
 
-function addAreaSeries(chart){
-  return chart.addAreaSeries({
-    lineColor:'#00d4ff',
-    topColor:'rgba(0,212,255,0.25)',
-    bottomColor:'rgba(0,212,255,0.02)',
-    lineWidth:2,
-    crosshairMarkerVisible:true,
-  });
-}
+    async function loadEquityFull(days) {
+      try {
+        const d = await api(`/api/equity?days=${days}`);
+        const pts = buildEquityPoints(d.points);
+        if (pts.length && equitySeriesFull) equitySeriesFull.setData(pts);
+        $('deckEquityMeta').textContent = days + 'd';
+      } catch (e) { }
+    }
 
-function initEquityChart(){
-  const el=$('equityChart');
-  if(!el||equityChart) return;
-  equityChart=createChart(el,280);
-  equitySeries=addAreaSeries(equityChart);
-  new ResizeObserver(()=>equityChart.applyOptions({width:el.clientWidth})).observe(el);
-}
+    $('equityDays').addEventListener('change', () => loadEquityFull($('equityDays').value));
 
-function initEquityChartFull(){
-  const el=$('equityChartFull');
-  if(!el) return;
-  equityChartFull=createChart(el,420);
-  equitySeriesFull=addAreaSeries(equityChartFull);
-  new ResizeObserver(()=>equityChartFull.applyOptions({width:el.clientWidth})).observe(el);
-  loadEquityFull($('equityDays').value);
-}
-
-async function loadEquityFull(days){
-  try{
-    const d=await api(`/api/equity?days=${days}`);
-    const pts=buildEquityPoints(d.points);
-    if(pts.length&&equitySeriesFull) equitySeriesFull.setData(pts);
-    $('deckEquityMeta').textContent=days+'d';
-  }catch(e){}
-}
-
-$('equityDays').addEventListener('change',()=>loadEquityFull($('equityDays').value));
-
-// ── PROVIDERS ─────────────────────────────────────────────────────────
-function renderProviders(el, diagInfo){
-  const llm=(diagInfo&&diagInfo.llm)||{};
-  const current=llm.current_provider||'';
-  const statuses=llm.providers||{};
-  const entries=Object.entries(statuses);
-  if(!entries.length){el.innerHTML='<div class="tbl-empty">No providers</div>';return;}
-  el.innerHTML=entries.map(([name,status])=>`
+    // ── PROVIDERS ─────────────────────────────────────────────────────────
+    function renderProviders(el, diagInfo) {
+      const llm = (diagInfo && diagInfo.llm) || {};
+      const current = llm.current_provider || '';
+      const statuses = llm.providers || {};
+      const entries = Object.entries(statuses);
+      if (!entries.length) { el.innerHTML = '<div class="tbl-empty">No providers</div>'; return; }
+      el.innerHTML = entries.map(([name, status]) => `
     <div class="provider-row">
       <div class="prov-dot" style="background:${provDot(status)}"></div>
-      <div class="prov-name">${esc(name)}${name===current?' <span class="prov-star">★</span>':''}</div>
+      <div class="prov-name">${esc(name)}${name === current ? ' <span class="prov-star">★</span>' : ''}</div>
       <div class="prov-status" style="color:${provDot(status)}">${esc(status)}</div>
     </div>`).join('');
-}
-
-function renderProvidersDetail(diagInfo){
-  renderProviders($('providersDetail'),diagInfo);
-  updateModelSwitcher(diagInfo);
-}
-
-function updateModelSwitcher(diagInfo){
-  const sel=$('modelSwitchSel');
-  if(!sel) return;
-  const llm=(diagInfo&&diagInfo.llm)||{};
-  const current=(llm.current_provider||'').toString();
-  const statuses=llm.providers||{};
-  const names=Object.keys(statuses).sort((a,b)=>a.localeCompare(b));
-  if(!names.length){
-    sel.innerHTML='<option value="">No providers</option>';
-    sel.disabled=true;
-    $('modelSwitchBtn').disabled=true;
-    return;
-  }
-  sel.disabled=false;
-  $('modelSwitchBtn').disabled=false;
-  sel.innerHTML=names.map(name=>`<option value="${esc(name)}">${esc(name)}${name===current?' (current)':''}</option>`).join('');
-  sel.value = names.includes(current) ? current : names[0];
-}
-
-async function switchPrimaryModel(){
-  const sel=$('modelSwitchSel');
-  const msg=$('modelSwitchMsg');
-  if(!sel || !msg) return;
-  const name=(sel.value||'').trim();
-  if(!name) return;
-  if(!confirm(`Switch primary model to "${name}"?`)) return;
-
-  msg.textContent='switching...';
-  msg.style.color='var(--muted)';
-  try{
-    const r=await fetch('/api/switch-model',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name}),
-      cache:'no-store',
-    });
-    const payload=await r.json().catch(()=>({}));
-    if(!r.ok){
-      throw new Error(payload.error||`HTTP ${r.status}`);
     }
-    msg.textContent=`queued: ${name}`;
-    msg.style.color='var(--ok)';
-    await refreshAll();
-  }catch(e){
-    msg.textContent=`error: ${e.message}`;
-    msg.style.color='var(--bad)';
-  }
-}
 
-// ── ANALYTICS ─────────────────────────────────────────────────────────
-async function loadAnalytics(days){
-  try{
-    const d=await api(`/api/analytics?days=${days}`);
-    $('analyticsMeta').textContent=days+'d';
-    $('deckAnalyticsMeta').textContent=days+'d';
-    renderAnalyticsSummary(d.summary||{});
-    renderAnalyticsPairs(d.pairs||[]);
-  }catch(e){}
-}
+    function renderProvidersDetail(diagInfo) {
+      renderProviders($('providersDetail'), diagInfo);
+      updateModelSwitcher(diagInfo);
+    }
 
-function renderAnalyticsSummary(s){
-  const rows=[
-    ['Trades',s.total_trades??'—'],
-    ['Win Rate',s.total_trades?fmtPct(s.win_rate):'—'],
-    ['Total P&L','$'+(s.total_pnl!=null?fmtPnl(s.total_pnl):'—')],
-    ['Avg P&L / Trade','$'+(s.average_pnl!=null?s.average_pnl.toFixed(2):'—')],
-    ['Max Drawdown','$'+(s.max_drawdown_pn!=null?s.max_drawdown_pn.toFixed(2):'—')],
-  ];
-  const html=rows.map(([k,v])=>`
+    function updateModelSwitcher(diagInfo) {
+      const sel = $('modelSwitchSel');
+      if (!sel) return;
+      const llm = (diagInfo && diagInfo.llm) || {};
+      const current = (llm.current_provider || '').toString();
+      const statuses = llm.providers || {};
+      const names = Object.keys(statuses).sort((a, b) => a.localeCompare(b));
+      if (!names.length) {
+        sel.innerHTML = '<option value="">No providers</option>';
+        sel.disabled = true;
+        $('modelSwitchBtn').disabled = true;
+        return;
+      }
+      sel.disabled = false;
+      $('modelSwitchBtn').disabled = false;
+      sel.innerHTML = names.map(name => `<option value="${esc(name)}">${esc(name)}${name === current ? ' (current)' : ''}</option>`).join('');
+      sel.value = names.includes(current) ? current : names[0];
+    }
+
+    async function switchPrimaryModel() {
+      const sel = $('modelSwitchSel');
+      const msg = $('modelSwitchMsg');
+      if (!sel || !msg) return;
+      const name = (sel.value || '').trim();
+      if (!name) return;
+      if (!confirm(`Switch primary model to "${name}"?`)) return;
+
+      msg.textContent = 'switching...';
+      msg.style.color = 'var(--muted)';
+      try {
+        const r = await fetch('/api/switch-model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+          cache: 'no-store',
+        });
+        const payload = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          throw new Error(payload.error || `HTTP ${r.status}`);
+        }
+        msg.textContent = `queued: ${name}`;
+        msg.style.color = 'var(--ok)';
+        await refreshAll();
+      } catch (e) {
+        msg.textContent = `error: ${e.message}`;
+        msg.style.color = 'var(--bad)';
+      }
+    }
+
+    // ── ANALYTICS ─────────────────────────────────────────────────────────
+    async function loadAnalytics(days) {
+      try {
+        const d = await api(`/api/analytics?days=${days}`);
+        $('analyticsMeta').textContent = days + 'd';
+        $('deckAnalyticsMeta').textContent = days + 'd';
+        renderAnalyticsSummary(d.summary || {});
+        renderAnalyticsPairs(d.pairs || []);
+      } catch (e) { }
+    }
+
+    function renderAnalyticsSummary(s) {
+      const rows = [
+        ['Trades', s.total_trades ?? '—'],
+        ['Win Rate', s.total_trades ? fmtPct(s.win_rate) : '—'],
+        ['Total P&L', '$' + (s.total_pnl != null ? fmtPnl(s.total_pnl) : '—')],
+        ['Avg P&L / Trade', '$' + (s.average_pnl != null ? s.average_pnl.toFixed(2) : '—')],
+        ['Max Drawdown', '$' + (s.max_drawdown_pn != null ? s.max_drawdown_pn.toFixed(2) : '—')],
+      ];
+      const html = rows.map(([k, v]) => `
     <div class="stat-row"><span class="stat-label">${k}</span><span class="stat-val">${v}</span></div>`).join('');
-  $('analyticsSummary').innerHTML=html||'<div class="tbl-empty">No data</div>';
-  // Mini in deck
-  const mini=$('deckAnalytics');
-  if(mini) mini.innerHTML=html;
-}
+      $('analyticsSummary').innerHTML = html || '<div class="tbl-empty">No data</div>';
+      // Mini in deck
+      const mini = $('deckAnalytics');
+      if (mini) mini.innerHTML = html;
+    }
 
-function renderAnalyticsPairs(pairs){
-  const tb=$('analyticsRows');
-  if(!tb) return;
-  if(!pairs.length){tb.innerHTML='<tr><td colspan="5" class="tbl-empty">No trades yet</td></tr>';return;}
-  tb.innerHTML=pairs.map(p=>{
-    const wr=fmtPct(p.win_rate);
-    const pnlCol=p.total_pnl>=0?'var(--ok)':'var(--bad)';
-    return `<tr>
+    function renderAnalyticsPairs(pairs) {
+      const tb = $('analyticsRows');
+      if (!tb) return;
+      if (!pairs.length) { tb.innerHTML = '<tr><td colspan="5" class="tbl-empty">No trades yet</td></tr>'; return; }
+      tb.innerHTML = pairs.map(p => {
+        const wr = fmtPct(p.win_rate);
+        const pnlCol = p.total_pnl >= 0 ? 'var(--ok)' : 'var(--bad)';
+        return `<tr>
       <td><strong>${esc(p.symbol)}</strong></td>
       <td class="mono">${p.trades}</td>
       <td class="mono">${wr}</td>
       <td class="mono" style="color:${pnlCol}">$${fmtPnl(p.total_pnl)}</td>
-      <td class="mono" style="color:${p.average_pnl>=0?'var(--ok)':'var(--bad)'}">$${p.average_pnl.toFixed(2)}</td>
-    </tr>`;}).join('');
-}
-
-$('analyticsDays').addEventListener('change',()=>loadAnalytics($('analyticsDays').value));
-
-// ── DECISIONS ─────────────────────────────────────────────────────────
-function renderDecisionRows(el, rows){
-  if(!rows||!rows.length){el.innerHTML='<tr><td colspan="6" class="tbl-empty">No decisions</td></tr>';return;}
-  el.innerHTML=rows.map(r=>`<tr>
-    <td class="mono" style="color:var(--muted);font-size:11px">${esc((r.updated_at||'').substring(0,19).replace('T',' '))}</td>
-    <td class="mono" style="font-size:10px;color:var(--muted2)">${esc((r.request_id||'').substring(0,14))}…</td>
-    <td><strong>${esc(r.symbol)}</strong></td>
-    <td>${actionBadge(r.decision||r.action)}</td>
-    <td>${statusBadge(r.status)}</td>
-    <td style="color:var(--muted);max-width:220px;overflow:hidden;text-overflow:ellipsis">${esc(r.reason||'—')}</td>
-  </tr>`).join('');
-}
-
-async function loadDecisions(){
-  const sym=($('decSymbol')||$('deckSymbol')).value.trim().toUpperCase();
-  const lim=parseInt(($('decLimit')||{value:'200'}).value)||200;
-  try{
-    const d=await api(`/api/decisions?limit=${lim}${sym?'&symbol='+encodeURIComponent(sym):''}`);
-    renderDecisionRows($('decisionRows'),d.decisions||[]);
-    renderDecisionRows($('deckDecisionRows'),( d.decisions||[]).slice(0,20));
-  }catch(e){}
-}
-
-$('decSymbol').addEventListener('change',loadDecisions);
-$('decLimit').addEventListener('change',loadDecisions);
-$('deckSymbol').addEventListener('change',loadDecisions);
-
-// ── DIAGNOSTICS ───────────────────────────────────────────────────────
-function renderDiagnostics(d){
-  diagData=d||{};
-  const el=$('diagContent');
-  if(!el||!d||Object.keys(d).length===0){if(el)el.innerHTML='<div class="tbl-empty">No diagnostics</div>';return;}
-
-  const sections=[];
-
-  // Risk
-  if(d.risk){
-    const r=d.risk;
-    sections.push(`<div class="diag-section"><div class="diag-title">Risk Engine</div><div class="diag-grid">
-      ${diagItem('Daily Loss','$'+(r.daily_loss??'—'))}
-      ${diagItem('Open Positions',r.open_positions+'/'+(r.max_positions??'—'))}
-      ${diagItem('Halted',r.halted?'YES':'NO',r.halted?'var(--bad)':'var(--ok)')}
-      ${diagItem('Profitable Trades',r.profitable_trades??'—')}
-    </div></div>`);
-  }
-
-  // Health
-  if(d.health){
-    const h=d.health,comps=h.components||{};
-    sections.push(`<div class="diag-section"><div class="diag-title">Component Health</div><div class="diag-grid">
-      ${diagItem('Overall',h.overall_ok?'OK':'DEGRADED',h.overall_ok?'var(--ok)':'var(--bad)')}
-      ${Object.entries(comps).map(([k,v])=>diagItem(k,v,v==='ok'?'var(--ok)':'var(--bad)')).join('')}
-    </div></div>`);
-  }
-
-  // LLM
-  if(d.llm){
-    sections.push(`<div class="diag-section"><div class="diag-title">LLM Router</div><div class="diag-grid">
-      ${diagItem('Primary',d.llm.current_provider||'—')}
-    </div></div>`);
-  }
-
-  el.innerHTML=sections.join('')||'<div class="tbl-empty">No structured data</div>';
-
-  renderProviders($('deckProviders'),d);
-  renderProvidersDetail(d);
-}
-
-function diagItem(k,v,color){
-  return `<div class="diag-item">
-    <div class="diag-item-key">${esc(k)}</div>
-    <div class="diag-item-val" style="${color?'color:'+color:''}">${esc(v)}</div>
-  </div>`;
-}
-
-// ── LOGS ──────────────────────────────────────────────────────────────
-function renderLogs(rows){
-  if(!Array.isArray(rows)||!rows.length) return;
-  lastLogTs=rows[rows.length-1]?.ts||lastLogTs;
-  const box=$('logs'), autoScroll=$('logAutoScroll').checked;
-  const frag=rows.map(l=>{
-    const lvl=(l.level||'info').toLowerCase();
-    return `<div class="logline">
-      <span class="log-ts">${esc((l.ts||'').substring(0,23))}</span>
-      <span class="log-lvl ${lvl}">${lvl}</span>
-      <span class="log-msg">${esc(l.msg||'')}</span>
-      <span class="log-caller">${esc(l.caller||'')}</span>
-    </div>`;
-  }).join('');
-  box.innerHTML=frag+box.innerHTML;
-  const lines=box.querySelectorAll('.logline');
-  for(let i=300;i<lines.length;i++) lines[i].remove();
-  if(autoScroll) box.scrollTop=0;
-}
-
-['logLevel','logComponent','logContains'].forEach(id=>{
-  $(id).addEventListener('change',()=>{
-    lastLogTs='';
-    $('logs').innerHTML='';
-    if(evtSource || streamLive){
-      connectSSE();
-    }else{
-      fetchLogs();
+      <td class="mono" style="color:${p.average_pnl >= 0 ? 'var(--ok)' : 'var(--bad)'}">$${p.average_pnl.toFixed(2)}</td>
+    </tr>`;
+      }).join('');
     }
-  });
-});
 
-async function fetchLogs(){
-  try{
-    const q=new URLSearchParams({limit:'200'});
-    const lvl=$('logLevel').value, comp=$('logComponent').value.trim(), cont=$('logContains').value.trim();
-    if(lvl) q.set('level',lvl);
-    if(comp) q.set('component',comp);
-    if(cont) q.set('contains',cont);
-    if(lastLogTs) q.set('since',lastLogTs);
-    const d=await api('/api/logs?'+q);
-    renderLogs(d.logs||[]);
-  }catch(e){}
-}
+    $('analyticsDays').addEventListener('change', () => loadAnalytics($('analyticsDays').value));
 
-$('modelSwitchBtn').addEventListener('click', switchPrimaryModel);
+    // ── DECISIONS ─────────────────────────────────────────────────────────
+    function renderDecisionRows(el, rows) {
+      if (!rows || !rows.length) { el.innerHTML = '<tr><td colspan="6" class="tbl-empty">No decisions</td></tr>'; return; }
+      el.innerHTML = rows.map(r => `<tr>
+    <td class="mono" style="color:var(--muted);font-size:11px">${esc((r.updated_at || '').substring(0, 19).replace('T', ' '))}</td>
+    <td class="mono" style="font-size:10px;color:var(--muted2)">${esc((r.request_id || '').substring(0, 14))}…</td>
+    <td><strong>${esc(r.symbol)}</strong></td>
+    <td>${actionBadge(r.decision || r.action)}</td>
+    <td>${statusBadge(r.status)}</td>
+    <td style="color:var(--muted);max-width:220px;overflow:hidden;text-overflow:ellipsis">${esc(r.reason || '—')}</td>
+  </tr>`).join('');
+    }
 
-// ── SSE STREAM ────────────────────────────────────────────────────────
-function disconnectSSE(){
-  if(evtSource){
-    evtSource.close();
-    evtSource=null;
-  }
-}
+    async function loadDecisions() {
+      const sym = ($('decSymbol') || $('deckSymbol')).value.trim().toUpperCase();
+      const lim = parseInt(($('decLimit') || { value: '200' }).value) || 200;
+      try {
+        const d = await api(`/api/decisions?limit=${lim}${sym ? '&symbol=' + encodeURIComponent(sym) : ''}`);
+        renderDecisionRows($('decisionRows'), d.decisions || []);
+        renderDecisionRows($('deckDecisionRows'), (d.decisions || []).slice(0, 20));
+      } catch (e) { }
+    }
 
-function sseURL(){
-  const q = new URLSearchParams();
-  const lvl=$('logLevel').value.trim();
-  const comp=$('logComponent').value.trim();
-  const cont=$('logContains').value.trim();
-  if(lvl) q.set('level', lvl);
-  if(comp) q.set('component', comp);
-  if(cont) q.set('contains', cont);
-  const qs=q.toString();
-  return '/api/events'+(qs?`?${qs}`:'');
-}
+    $('decSymbol').addEventListener('change', loadDecisions);
+    $('decLimit').addEventListener('change', loadDecisions);
+    $('deckSymbol').addEventListener('change', loadDecisions);
 
-function connectSSE(){
-  if(!window.EventSource){
-    streamLive=false;
-    setStreamPill('POLL');
-    startPollingFallback();
-    return;
-  }
-  disconnectSSE();
-  streamLive=false;
-  setStreamPill('RETRY');
+    // ── DIAGNOSTICS ───────────────────────────────────────────────────────
+    function renderDiagnostics(d) {
+      diagData = d || {};
+      const el = $('diagContent');
+      if (!el || !d || Object.keys(d).length === 0) { if (el) el.innerHTML = '<div class="tbl-empty">No diagnostics</div>'; return; }
 
-  const src=new EventSource(sseURL());
-  evtSource=src;
+      const sections = [];
 
-  src.addEventListener('ping',()=>{
-    streamLive=true;
-    setStreamPill('SSE');
-    stopPollingFallback();
-  });
+      // Risk
+      if (d.risk) {
+        const r = d.risk;
+        sections.push(`<div class="diag-section"><div class="diag-title">Risk Engine</div><div class="diag-grid">
+      ${diagItem('Daily Loss', '$' + (r.daily_loss ?? '—'))}
+      ${diagItem('Open Positions', r.open_positions + '/' + (r.max_positions ?? '—'))}
+      ${diagItem('Halted', r.halted ? 'YES' : 'NO', r.halted ? 'var(--bad)' : 'var(--ok)')}
+      ${diagItem('Profitable Trades', r.profitable_trades ?? '—')}
+    </div></div>`);
+      }
 
-  src.addEventListener('snapshot',(ev)=>{
-    try{
-      const snap=JSON.parse(ev.data||'{}');
-      renderSnapshot(snap);
-      $('syncTs').textContent='stream '+new Date().toLocaleTimeString('en-GB');
-      $('syncTs').className='sync-ts';
-    }catch(_){}
-  });
+      // Health
+      if (d.health) {
+        const h = d.health, comps = h.components || {};
+        sections.push(`<div class="diag-section"><div class="diag-title">Component Health</div><div class="diag-grid">
+      ${diagItem('Overall', h.overall_ok ? 'OK' : 'DEGRADED', h.overall_ok ? 'var(--ok)' : 'var(--bad)')}
+      ${Object.entries(comps).map(([k, v]) => diagItem(k, v, v === 'ok' ? 'var(--ok)' : 'var(--bad)')).join('')}
+    </div></div>`);
+      }
 
-  src.addEventListener('logs',(ev)=>{
-    try{
-      const payload=JSON.parse(ev.data||'{}');
-      const rows=Array.isArray(payload?.logs)?payload.logs:[];
-      renderLogs(rows);
-    }catch(_){}
-  });
+      // LLM
+      if (d.llm) {
+        sections.push(`<div class="diag-section"><div class="diag-title">LLM Router</div><div class="diag-grid">
+      ${diagItem('Primary', d.llm.current_provider || '—')}
+    </div></div>`);
+      }
 
-  src.onerror=()=>{
-    streamLive=false;
-    setStreamPill('POLL');
-    startPollingFallback();
-  };
-}
+      el.innerHTML = sections.join('') || '<div class="tbl-empty">No structured data</div>';
 
-function startPollingFallback(){
-  if(pollTimer) return;
-  pollTimer=setInterval(refreshAll,5000);
-}
+      renderProviders($('deckProviders'), d);
+      renderProvidersDetail(d);
+    }
 
-function stopPollingFallback(){
-  if(!pollTimer) return;
-  clearInterval(pollTimer);
-  pollTimer=null;
-}
+    function diagItem(k, v, color) {
+      return `<div class="diag-item">
+    <div class="diag-item-key">${esc(k)}</div>
+    <div class="diag-item-val" style="${color ? 'color:' + color : ''}">${esc(v)}</div>
+  </div>`;
+    }
 
-// ── MAIN POLL ─────────────────────────────────────────────────────────
-async function refreshAll(){
-  const ts=$('syncTs');
-  try{
-    const [snap,diag]=await Promise.all([
-      api('/api/snapshot'),
-      api('/api/diagnostics'),
-    ]);
-    renderSnapshot(snap);
-    renderDiagnostics(diag);
+    // ── LOGS ──────────────────────────────────────────────────────────────
+    function renderLogs(rows) {
+      if (!Array.isArray(rows) || !rows.length) return;
+      lastLogTs = rows[rows.length - 1]?.ts || lastLogTs;
+      const box = $('logs'), autoScroll = $('logAutoScroll').checked;
+      const frag = rows.map(l => {
+        const lvl = (l.level || 'info').toLowerCase();
+        return `<div class="logline">
+      <span class="log-ts">${esc((l.ts || '').substring(0, 23))}</span>
+      <span class="log-lvl ${lvl}">${lvl}</span>
+      <span class="log-msg">${esc(l.msg || '')}</span>
+      <span class="log-caller">${esc(l.caller || '')}</span>
+    </div>`;
+      }).join('');
+      box.innerHTML = frag + box.innerHTML;
+      const lines = box.querySelectorAll('.logline');
+      for (let i = 300; i < lines.length; i++) lines[i].remove();
+      if (autoScroll) box.scrollTop = 0;
+    }
 
-    // Equity mini chart
-    if(!equityChart) initEquityChart();
-    const eq=await api('/api/equity?days=30');
-    const pts=buildEquityPoints(eq.points);
-    if(pts.length&&equitySeries) equitySeries.setData(pts);
+    ['logLevel', 'logComponent', 'logContains'].forEach(id => {
+      $(id).addEventListener('change', () => {
+        lastLogTs = '';
+        $('logs').innerHTML = '';
+        if (evtSource || streamLive) {
+          connectSSE();
+        } else {
+          fetchLogs();
+        }
+      });
+    });
 
-    // Analytics mini
-    try{
-      const an=await api('/api/analytics?days=30');
-      renderAnalyticsSummary(an.summary||{});
-      renderAnalyticsPairs(an.pairs||[]);
-    }catch(e){}
+    async function fetchLogs() {
+      try {
+        const q = new URLSearchParams({ limit: '200' });
+        const lvl = $('logLevel').value, comp = $('logComponent').value.trim(), cont = $('logContains').value.trim();
+        if (lvl) q.set('level', lvl);
+        if (comp) q.set('component', comp);
+        if (cont) q.set('contains', cont);
+        if (lastLogTs) q.set('since', lastLogTs);
+        const d = await api('/api/logs?' + q);
+        renderLogs(d.logs || []);
+      } catch (e) { }
+    }
 
-    // Decisions mini
-    await loadDecisions();
-    await fetchLogs();
+    $('modelSwitchBtn').addEventListener('click', switchPrimaryModel);
 
-    ts.textContent='sync '+new Date().toLocaleTimeString('en-GB');
-    ts.className='sync-ts';
-  }catch(e){
-    ts.textContent='sync error: '+e.message;
-    ts.className='sync-ts err';
-  }
-}
+    // ── SSE STREAM ────────────────────────────────────────────────────────
+    function disconnectSSE() {
+      if (evtSource) {
+        evtSource.close();
+        evtSource = null;
+      }
+    }
 
-async function refreshNonStreamData(){
-  try{
-    const diag = await api('/api/diagnostics');
-    renderDiagnostics(diag);
-  }catch(_){}
-  try{
-    const eq=await api('/api/equity?days=30');
-    const pts=buildEquityPoints(eq.points);
-    if(!equityChart) initEquityChart();
-    if(pts.length&&equitySeries) equitySeries.setData(pts);
-  }catch(_){}
-  try{
-    const an=await api('/api/analytics?days=30');
-    renderAnalyticsSummary(an.summary||{});
-    renderAnalyticsPairs(an.pairs||[]);
-  }catch(_){}
-  try{
-    await loadDecisions();
-  }catch(_){}
-}
+    function sseURL() {
+      const q = new URLSearchParams();
+      const lvl = $('logLevel').value.trim();
+      const comp = $('logComponent').value.trim();
+      const cont = $('logContains').value.trim();
+      if (lvl) q.set('level', lvl);
+      if (comp) q.set('component', comp);
+      if (cont) q.set('contains', cont);
+      const qs = q.toString();
+      return '/api/events' + (qs ? `?${qs}` : '');
+    }
 
-// ── INIT ──────────────────────────────────────────────────────────────
-(function init(){
-  const hash=(window.location.hash||'').replace('#','');
-  if(hash&&VIEW_LABELS[hash]) navigate(hash);
-  window.addEventListener('hashchange',()=>{
-    const h=(window.location.hash||'').replace('#','');
-    if(h&&VIEW_LABELS[h]) navigate(h);
-  });
-  refreshAll();
-  nonStreamTimer=setInterval(refreshNonStreamData,10000);
-  connectSSE();
-})();
-</script>
+    function connectSSE() {
+      if (!window.EventSource) {
+        streamLive = false;
+        setStreamPill('POLL');
+        startPollingFallback();
+        return;
+      }
+      disconnectSSE();
+      streamLive = false;
+      setStreamPill('RETRY');
+
+      const src = new EventSource(sseURL());
+      evtSource = src;
+
+      src.addEventListener('ping', () => {
+        streamLive = true;
+        setStreamPill('SSE');
+        stopPollingFallback();
+      });
+
+      src.addEventListener('snapshot', (ev) => {
+        try {
+          const snap = JSON.parse(ev.data || '{}');
+          renderSnapshot(snap);
+          $('syncTs').textContent = 'stream ' + new Date().toLocaleTimeString('en-GB');
+          $('syncTs').className = 'sync-ts';
+        } catch (_) { }
+      });
+
+      src.addEventListener('logs', (ev) => {
+        try {
+          const payload = JSON.parse(ev.data || '{}');
+          const rows = Array.isArray(payload?.logs) ? payload.logs : [];
+          renderLogs(rows);
+        } catch (_) { }
+      });
+
+      src.onerror = () => {
+        streamLive = false;
+        setStreamPill('POLL');
+        startPollingFallback();
+      };
+    }
+
+    function startPollingFallback() {
+      if (pollTimer) return;
+      pollTimer = setInterval(refreshAll, 5000);
+    }
+
+    function stopPollingFallback() {
+      if (!pollTimer) return;
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+
+    // ── MAIN POLL ─────────────────────────────────────────────────────────
+    async function refreshAll() {
+      const ts = $('syncTs');
+      try {
+        const [snap, diag] = await Promise.all([
+          api('/api/snapshot'),
+          api('/api/diagnostics'),
+        ]);
+        renderSnapshot(snap);
+        renderDiagnostics(diag);
+
+        // Equity mini chart
+        if (!equityChart) initEquityChart();
+        const eq = await api('/api/equity?days=30');
+        const pts = buildEquityPoints(eq.points);
+        if (pts.length && equitySeries) equitySeries.setData(pts);
+
+        // Analytics mini
+        try {
+          const an = await api('/api/analytics?days=30');
+          renderAnalyticsSummary(an.summary || {});
+          renderAnalyticsPairs(an.pairs || []);
+        } catch (e) { }
+
+        // Decisions mini
+        await loadDecisions();
+        await fetchLogs();
+
+        ts.textContent = 'sync ' + new Date().toLocaleTimeString('en-GB');
+        ts.className = 'sync-ts';
+      } catch (e) {
+        ts.textContent = 'sync error: ' + e.message;
+        ts.className = 'sync-ts err';
+      }
+    }
+
+    async function refreshNonStreamData() {
+      try {
+        const diag = await api('/api/diagnostics');
+        renderDiagnostics(diag);
+      } catch (_) { }
+      try {
+        const eq = await api('/api/equity?days=30');
+        const pts = buildEquityPoints(eq.points);
+        if (!equityChart) initEquityChart();
+        if (pts.length && equitySeries) equitySeries.setData(pts);
+      } catch (_) { }
+      try {
+        const an = await api('/api/analytics?days=30');
+        renderAnalyticsSummary(an.summary || {});
+        renderAnalyticsPairs(an.pairs || []);
+      } catch (_) { }
+      try {
+        await loadDecisions();
+      } catch (_) { }
+    }
+
+    // ── INIT ──────────────────────────────────────────────────────────────
+    (function init() {
+      const hash = (window.location.hash || '').replace('#', '');
+      if (hash && VIEW_LABELS[hash]) navigate(hash);
+      window.addEventListener('hashchange', () => {
+        const h = (window.location.hash || '').replace('#', '');
+        if (h && VIEW_LABELS[h]) navigate(h);
+      });
+      refreshAll();
+      nonStreamTimer = setInterval(refreshNonStreamData, 10000);
+      connectSSE();
+    })();
+  </script>
 </body>
+
 </html>
