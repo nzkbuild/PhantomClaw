@@ -22,6 +22,7 @@ type Dependencies struct {
 	Decisions   func(ctx context.Context, limit int, symbol string) (map[string]any, error)
 	Sessions    func(ctx context.Context, limit int, pair string) (map[string]any, error)
 	Diagnostics func(ctx context.Context) (map[string]any, error)
+	Ops         func(ctx context.Context) (map[string]any, error)
 	Logs        func(ctx context.Context, query bridge.LogQuery) (map[string]any, error)
 	Equity      func(ctx context.Context, days int) (map[string]any, error)
 	Analytics   func(ctx context.Context, days int) (map[string]any, error)
@@ -90,6 +91,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/decisions", s.handleDecisions)
 	s.mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	s.mux.HandleFunc("GET /api/diagnostics", s.handleDiagnostics)
+	s.mux.HandleFunc("GET /api/ops", s.handleOps)
 	s.mux.HandleFunc("GET /api/logs", s.handleLogs)
 	s.mux.HandleFunc("GET /api/equity", s.handleEquity)
 	s.mux.HandleFunc("GET /api/analytics", s.handleAnalytics)
@@ -158,6 +160,22 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Redact sensitive fields before sending to browser.
+	RedactMap(data)
+	writeJSON(w, data)
+}
+
+func (s *Server) handleOps(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Ops == nil {
+		http.Error(w, `{"error":"ops status unavailable"}`, http.StatusNotImplemented)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	data, err := s.deps.Ops(ctx)
+	if err != nil {
+		http.Error(w, `{"error":"ops status failed"}`, http.StatusInternalServerError)
+		return
+	}
 	RedactMap(data)
 	writeJSON(w, data)
 }
@@ -296,6 +314,19 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 					// Advance the log cursor.
 					if ts, ok := latestLogTS(logData["logs"]); ok {
 						lastLogTs = ts
+					}
+				}
+			}
+
+			// Push operational truth state.
+			if s.deps.Ops != nil {
+				ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+				opsData, err := s.deps.Ops(ctx)
+				cancel()
+				if err == nil {
+					RedactMap(opsData)
+					if !sendEvent("ops", opsData) {
+						return
 					}
 				}
 			}

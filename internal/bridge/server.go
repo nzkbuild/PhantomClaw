@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -150,6 +151,16 @@ type Server struct {
 
 	// lastSignalAt tracks when the EA last sent a signal (for stale-data detection).
 	lastSignalAt atomic.Pointer[time.Time]
+	// lastDecisionAt tracks when a decision became available for retrieval.
+	lastDecisionAt atomic.Pointer[time.Time]
+
+	authFailureEvents        []time.Time
+	contractMismatchEvents   []time.Time
+	signalAckLatencyMS       []float64
+	decisionReadyLatencyMS   []float64
+	decisionConsumeLatencyMS []float64
+	signalAcceptedAt         map[string]time.Time
+	decisionReadyAt          map[string]time.Time
 }
 
 // NewServer creates a new bridge server.
@@ -164,6 +175,8 @@ func NewServer(host string, port int, onSignal SignalHandler, onTradeResult Trad
 		latestBySymbol:   make(map[string]SignalRequest),
 		pendingBySymbol:  make(map[string]SignalResponse),
 		pendingByRequest: make(map[string]SignalResponse),
+		signalAcceptedAt: make(map[string]time.Time),
+		decisionReadyAt:  make(map[string]time.Time),
 		decisionTTL:      30 * time.Minute,
 		signalTimeout:    defaultSignalHandlerTimeout,
 	}
@@ -174,6 +187,7 @@ func NewServer(host string, port int, onSignal SignalHandler, onTradeResult Trad
 	mux.HandleFunc("POST /decision/consume", s.handleDecisionConsume)
 	mux.HandleFunc("POST /trade-result", s.handleTradeResult)
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /health/ops", s.handleOpsHealth)
 	mux.HandleFunc("GET /health/diagnostics", s.handleDiagnostics)
 	mux.HandleFunc("GET /models", s.handleModels)
 	mux.HandleFunc("GET /price", s.handlePrice)
@@ -253,6 +267,7 @@ func (s *Server) LastSignalTime() time.Time {
 
 // handleSignal processes POST /signal from EA.
 func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	s.setProtocolHeaders(w)
 	if !s.requireAuth(w, r) {
 		return
@@ -272,6 +287,7 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	s.latestBySymbol[strings.ToUpper(req.Symbol)] = req
+	s.signalAcceptedAt[req.RequestID] = time.Now()
 	s.latestAccount = AccountSnapshot{
 		Balance:       req.Balance,
 		Equity:        req.Equity,
@@ -320,6 +336,10 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 		Action:    "HOLD",
 		Reason:    "accepted_async",
 	}
+
+	s.mu.Lock()
+	s.recordLatencySample(&s.signalAckLatencyMS, time.Since(start).Seconds()*1000, 300)
+	s.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -390,6 +410,7 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 			}
 			if decision.RequestID != "" && consume {
 				_ = s.db.ConsumePendingDecision(decision.RequestID)
+				s.recordDecisionConsumed(decision.RequestID, time.Now())
 				s.removePendingDecisionInMemory(decision.RequestID, decision.Symbol)
 			}
 		}
@@ -407,6 +428,7 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 		}
 		if ok {
 			if decision.RequestID != "" && consume {
+				s.recordDecisionConsumed(decision.RequestID, time.Now())
 				s.removePendingDecisionInMemory(decision.RequestID, decision.Symbol)
 			}
 		}
@@ -455,6 +477,7 @@ func (s *Server) handleDecisionConsume(w http.ResponseWriter, r *http.Request) {
 	decision, ok := s.pendingByRequest[requestID]
 	s.mu.RUnlock()
 	if ok {
+		s.recordDecisionConsumed(requestID, time.Now())
 		s.removePendingDecisionInMemory(requestID, decision.Symbol)
 	}
 
@@ -481,6 +504,8 @@ func (s *Server) removePendingDecisionInMemory(requestID, symbol string) {
 	defer s.mu.Unlock()
 	if requestID != "" {
 		delete(s.pendingByRequest, requestID)
+		delete(s.signalAcceptedAt, requestID)
+		delete(s.decisionReadyAt, requestID)
 	}
 	if symbol != "" {
 		normalized := strings.ToUpper(strings.TrimSpace(symbol))
@@ -509,6 +534,17 @@ func parseBoolQuery(v string) (bool, bool) {
 }
 
 func (s *Server) storePendingDecision(decision SignalResponse, symbol string) {
+	now := time.Now()
+	if decision.RequestID != "" {
+		s.mu.Lock()
+		if acceptedAt, ok := s.signalAcceptedAt[decision.RequestID]; ok && !acceptedAt.IsZero() {
+			s.recordLatencySample(&s.decisionReadyLatencyMS, now.Sub(acceptedAt).Seconds()*1000, 300)
+		}
+		s.decisionReadyAt[decision.RequestID] = now
+		s.mu.Unlock()
+		s.lastDecisionAt.Store(&now)
+	}
+
 	s.storePendingDecisionInMemory(decision, symbol)
 
 	if s.db == nil || decision.RequestID == "" {
@@ -594,6 +630,201 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"version":  serviceVersion,
 		"contract": contractVersion,
 	}
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// handleOpsHealth returns canonical operational truth for EA/ops/dashboard surfaces.
+func (s *Server) handleOpsHealth(w http.ResponseWriter, r *http.Request) {
+	s.setProtocolHeaders(w)
+	if !s.requireAuth(w, r) {
+		return
+	}
+	if !s.requireCompatibleContract(w, r) {
+		return
+	}
+
+	now := time.Now().UTC()
+	lastSignal := s.LastSignalTime()
+	lastDecision := time.Time{}
+	if p := s.lastDecisionAt.Load(); p != nil {
+		lastDecision = *p
+	}
+
+	s.mu.RLock()
+	authEnabled := strings.TrimSpace(s.authToken) != ""
+	authFailures5m := s.countEventsSinceLocked(s.authFailureEvents, 5*time.Minute, now)
+	contractMismatches5m := s.countEventsSinceLocked(s.contractMismatchEvents, 5*time.Minute, now)
+	queueDepth := len(s.pendingByRequest)
+	oldestReady := s.oldestDecisionReadyLocked()
+	signalAck := append([]float64(nil), s.signalAckLatencyMS...)
+	decisionReady := append([]float64(nil), s.decisionReadyLatencyMS...)
+	decisionConsume := append([]float64(nil), s.decisionConsumeLatencyMS...)
+	s.mu.RUnlock()
+
+	lastSignalAgeSec := ageSeconds(now, lastSignal)
+	lastDecisionAgeSec := ageSeconds(now, lastDecision)
+	oldestQueueAgeSec := ageSeconds(now, oldestReady)
+
+	eaLinkStatus := "GREEN"
+	eaLinkReason := "EA_LINK_HEALTHY"
+	eaLinkMsg := "EA signal flow is healthy"
+	if lastSignal.IsZero() {
+		eaLinkStatus = "RED"
+		eaLinkReason = "EA_NO_SIGNALS_YET"
+		eaLinkMsg = "No EA signal received yet"
+	} else if lastSignalAgeSec > 300 {
+		eaLinkStatus = "RED"
+		eaLinkReason = "EA_STALE_SIGNAL"
+		eaLinkMsg = "EA signal stream is stale"
+	} else if lastSignalAgeSec > 120 {
+		eaLinkStatus = "AMBER"
+		eaLinkReason = "EA_SIGNAL_LAGGING"
+		eaLinkMsg = "EA signal stream is lagging"
+	}
+
+	authStatus := "GREEN"
+	authReason := "AUTH_OK"
+	authMsg := "Bridge auth checks are healthy"
+	if !authEnabled {
+		authStatus = "AMBER"
+		authReason = "AUTH_DISABLED"
+		authMsg = "Bridge auth token is not configured"
+	} else if authFailures5m >= 5 {
+		authStatus = "RED"
+		authReason = "AUTH_UNAUTHORIZED"
+		authMsg = "Frequent unauthorized requests detected"
+	} else if authFailures5m > 0 {
+		authStatus = "AMBER"
+		authReason = "AUTH_INTERMITTENT_FAILURE"
+		authMsg = "Intermittent unauthorized requests detected"
+	}
+
+	contractStatus := "GREEN"
+	contractReason := "CONTRACT_OK"
+	contractMsg := "Contract headers are compatible"
+	if contractMismatches5m >= 5 {
+		contractStatus = "RED"
+		contractReason = "CONTRACT_MISMATCH"
+		contractMsg = "Frequent contract mismatches detected"
+	} else if contractMismatches5m > 0 {
+		contractStatus = "AMBER"
+		contractReason = "CONTRACT_INTERMITTENT_MISMATCH"
+		contractMsg = "Intermittent contract mismatches detected"
+	}
+
+	decisionP95 := percentile(decisionReady, 95)
+	decisionConsumeP95 := percentile(decisionConsume, 95)
+	decisionStatus := "GREEN"
+	decisionReason := "DECISION_LOOP_HEALTHY"
+	decisionMsg := "Decision loop is healthy"
+	if queueDepth > 100 || oldestQueueAgeSec > 120 {
+		decisionStatus = "RED"
+		decisionReason = "QUEUE_STUCK"
+		decisionMsg = "Decision queue appears stuck"
+	} else if queueDepth > 20 || oldestQueueAgeSec > 30 || decisionP95 > 15000 {
+		decisionStatus = "AMBER"
+		decisionReason = "DECISION_LOOP_DEGRADED"
+		decisionMsg = "Decision loop latency is elevated"
+	}
+
+	aiStatus := "GREEN"
+	aiReason := "AI_DECISIONS_FLOWING"
+	aiMsg := "AI decisions are being produced"
+	if lastDecision.IsZero() && !lastSignal.IsZero() {
+		aiStatus = "AMBER"
+		aiReason = "AI_NO_DECISIONS_YET"
+		aiMsg = "Signals seen but no decision produced yet"
+	} else if !lastDecision.IsZero() && lastDecisionAgeSec > 600 && lastSignalAgeSec <= 120 {
+		aiStatus = "AMBER"
+		aiReason = "AI_DECISION_STALE"
+		aiMsg = "No recent AI decision while signals continue"
+	}
+
+	freshnessStatus := "GREEN"
+	freshnessReason := "DATA_FRESH"
+	freshnessMsg := "Operational data is fresh"
+	if lastSignal.IsZero() || lastSignalAgeSec > 300 {
+		freshnessStatus = "RED"
+		freshnessReason = "DATA_STALE"
+		freshnessMsg = "Core signal data is stale"
+	} else if lastSignalAgeSec > 120 {
+		freshnessStatus = "AMBER"
+		freshnessReason = "DATA_AGING"
+		freshnessMsg = "Core signal data is aging"
+	}
+
+	dashboardSync := section(
+		"GREEN",
+		"DASHBOARD_SYNC_EXTERNAL",
+		"Dashboard sync is evaluated in dashboard service scope",
+		time.Time{},
+		time.Time{},
+		map[string]any{},
+	)
+	eaLink := section(eaLinkStatus, eaLinkReason, eaLinkMsg, lastSignal, time.Time{}, map[string]any{
+		"last_signal_age_sec": lastSignalAgeSec,
+	})
+	bridgeAuth := section(authStatus, authReason, authMsg, now, nowIf(authFailures5m > 0, now), map[string]any{
+		"auth_enabled":     authEnabled,
+		"auth_failures_5m": authFailures5m,
+		"auth_header":      bridgeAuthHeader,
+		"contract_header":  contractVersionHeader,
+	})
+	contractCompat := section(contractStatus, contractReason, contractMsg, now, nowIf(contractMismatches5m > 0, now), map[string]any{
+		"contract_server":      contractVersion,
+		"contract_mismatch_5m": contractMismatches5m,
+	})
+	decisionLoop := section(decisionStatus, decisionReason, decisionMsg, lastDecision, time.Time{}, map[string]any{
+		"queue_depth_active":              queueDepth,
+		"queue_oldest_age_sec":            oldestQueueAgeSec,
+		"decision_ready_latency_p95_ms":   decisionP95,
+		"decision_consume_latency_p95_ms": decisionConsumeP95,
+		"signal_ack_latency_p95_ms":       percentile(signalAck, 95),
+	})
+	aiHealth := section(aiStatus, aiReason, aiMsg, lastDecision, time.Time{}, map[string]any{
+		"last_decision_age_sec": lastDecisionAgeSec,
+	})
+	dataFreshness := section(freshnessStatus, freshnessReason, freshnessMsg, lastSignal, time.Time{}, map[string]any{
+		"last_signal_age_sec":   lastSignalAgeSec,
+		"last_decision_age_sec": lastDecisionAgeSec,
+	})
+
+	sections := []map[string]any{eaLink, bridgeAuth, contractCompat, decisionLoop, aiHealth, dataFreshness}
+	overallStatus, overallReason, overallMsg := deriveOverall(sections)
+	overall := section(overallStatus, overallReason, overallMsg, now, nowIf(overallStatus != "GREEN", now), map[string]any{})
+
+	out := map[string]any{
+		"service":         "phantomclaw",
+		"version":         serviceVersion,
+		"contract":        contractVersion,
+		"ts":              now.Format(time.RFC3339),
+		"overall":         overall,
+		"ea_link":         eaLink,
+		"bridge_auth":     bridgeAuth,
+		"contract_compat": contractCompat,
+		"decision_loop":   decisionLoop,
+		"ai_health":       aiHealth,
+		"dashboard_sync":  dashboardSync,
+		"data_freshness":  dataFreshness,
+		// Flat keys for constrained clients (e.g. EA JSON extraction).
+		"overall_status":          overallStatus,
+		"overall_reason_code":     overallReason,
+		"ea_link_status":          eaLinkStatus,
+		"bridge_auth_status":      authStatus,
+		"contract_compat_status":  contractStatus,
+		"decision_loop_status":    decisionStatus,
+		"ai_health_status":        aiStatus,
+		"last_signal_age_sec":     lastSignalAgeSec,
+		"last_decision_age_sec":   lastDecisionAgeSec,
+		"queue_depth_active":      queueDepth,
+		"queue_oldest_age_sec":    oldestQueueAgeSec,
+		"auth_failures_5m":        authFailures5m,
+		"contract_mismatch_5m":    contractMismatches5m,
+		"decision_ready_p95_ms":   decisionP95,
+		"decision_consume_p95_ms": decisionConsumeP95,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
 }
 
@@ -860,6 +1091,7 @@ func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) bool {
 	if subtle.ConstantTimeCompare([]byte(token), []byte(tokenExpected)) == 1 {
 		return true
 	}
+	s.recordAuthFailure(time.Now())
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
@@ -878,6 +1110,7 @@ func (s *Server) requireCompatibleContract(w http.ResponseWriter, r *http.Reques
 	}
 
 	if contractMajor(requested) != contractMajor(contractVersion) {
+		s.recordContractMismatch(time.Now())
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -898,6 +1131,165 @@ func contractMajor(v string) string {
 	v = strings.TrimPrefix(v, "v")
 	parts := strings.SplitN(v, ".", 2)
 	return parts[0]
+}
+
+func (s *Server) recordAuthFailure(at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.authFailureEvents = append(s.authFailureEvents, at.UTC())
+	s.pruneEventsLocked(&s.authFailureEvents, 5*time.Minute, at.UTC())
+}
+
+func (s *Server) recordContractMismatch(at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.contractMismatchEvents = append(s.contractMismatchEvents, at.UTC())
+	s.pruneEventsLocked(&s.contractMismatchEvents, 5*time.Minute, at.UTC())
+}
+
+func (s *Server) recordDecisionConsumed(requestID string, at time.Time) {
+	if strings.TrimSpace(requestID) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	readyAt, ok := s.decisionReadyAt[requestID]
+	if !ok || readyAt.IsZero() {
+		return
+	}
+	s.recordLatencySample(&s.decisionConsumeLatencyMS, at.Sub(readyAt).Seconds()*1000, 300)
+}
+
+func (s *Server) countEventsSinceLocked(events []time.Time, window time.Duration, now time.Time) int {
+	if len(events) == 0 {
+		return 0
+	}
+	cutoff := now.Add(-window)
+	count := 0
+	for _, ts := range events {
+		if !ts.Before(cutoff) {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *Server) pruneEventsLocked(events *[]time.Time, window time.Duration, now time.Time) {
+	if len(*events) == 0 {
+		return
+	}
+	cutoff := now.Add(-window)
+	out := (*events)[:0]
+	for _, ts := range *events {
+		if !ts.Before(cutoff) {
+			out = append(out, ts)
+		}
+	}
+	*events = out
+}
+
+func (s *Server) oldestDecisionReadyLocked() time.Time {
+	var oldest time.Time
+	for _, ts := range s.decisionReadyAt {
+		if ts.IsZero() {
+			continue
+		}
+		if oldest.IsZero() || ts.Before(oldest) {
+			oldest = ts
+		}
+	}
+	return oldest
+}
+
+func (s *Server) recordLatencySample(samples *[]float64, value float64, capN int) {
+	if value < 0 {
+		value = 0
+	}
+	*samples = append(*samples, value)
+	if capN > 0 && len(*samples) > capN {
+		start := len(*samples) - capN
+		copy(*samples, (*samples)[start:])
+		*samples = (*samples)[:capN]
+	}
+}
+
+func percentile(samples []float64, p float64) float64 {
+	if len(samples) == 0 {
+		return 0
+	}
+	cp := append([]float64(nil), samples...)
+	sort.Float64s(cp)
+	if p <= 0 {
+		return cp[0]
+	}
+	if p >= 100 {
+		return cp[len(cp)-1]
+	}
+	idx := int((p / 100) * float64(len(cp)-1))
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(cp) {
+		idx = len(cp) - 1
+	}
+	return cp[idx]
+}
+
+func section(status, reasonCode, message string, lastOK, lastError time.Time, metrics map[string]any) map[string]any {
+	return map[string]any{
+		"status":        status,
+		"reason_code":   reasonCode,
+		"message":       message,
+		"last_ok_at":    toRFC3339(lastOK),
+		"last_error_at": toRFC3339(lastError),
+		"metrics":       metrics,
+	}
+}
+
+func toRFC3339(ts time.Time) string {
+	if ts.IsZero() {
+		return ""
+	}
+	return ts.UTC().Format(time.RFC3339)
+}
+
+func nowIf(cond bool, now time.Time) time.Time {
+	if cond {
+		return now
+	}
+	return time.Time{}
+}
+
+func ageSeconds(now, ts time.Time) int64 {
+	if ts.IsZero() {
+		return -1
+	}
+	age := now.Sub(ts.UTC())
+	if age < 0 {
+		return 0
+	}
+	return int64(age.Seconds())
+}
+
+func deriveOverall(sections []map[string]any) (status, reasonCode, message string) {
+	status = "GREEN"
+	reasonCode = "OPS_HEALTHY"
+	message = "All critical operational checks are healthy"
+
+	priority := map[string]int{"GREEN": 0, "AMBER": 1, "RED": 2}
+	currentPrio := priority[status]
+	for _, sec := range sections {
+		s, _ := sec["status"].(string)
+		rc, _ := sec["reason_code"].(string)
+		msg, _ := sec["message"].(string)
+		if p, ok := priority[s]; ok && p > currentPrio {
+			status = s
+			reasonCode = rc
+			message = msg
+			currentPrio = p
+		}
+	}
+	return status, reasonCode, message
 }
 
 func parsePositiveInt(raw string, fallback int, max int) int {

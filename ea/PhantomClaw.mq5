@@ -20,6 +20,22 @@ datetime g_lastSignalTime = 0;
 int      g_requestTimeout = 500;
 long     g_requestSeq = 0;
 string   g_lastRequestID = "";
+datetime g_lastOpsPollTime = 0;
+string   g_opsOverallStatus = "UNKNOWN";
+string   g_opsReasonCode = "";
+string   g_opsEALinkStatus = "UNKNOWN";
+string   g_opsAuthStatus = "UNKNOWN";
+string   g_opsContractStatus = "UNKNOWN";
+string   g_opsDecisionStatus = "UNKNOWN";
+string   g_opsAIStatus = "UNKNOWN";
+int      g_opsLastSignalAgeSec = -1;
+int      g_opsQueueDepth = -1;
+int      g_opsAuthFailures5m = -1;
+int      g_lastHTTPStatus = 0;
+string   g_lastHTTPEndpoint = "";
+string   g_lastHTTPErrorClass = "";
+datetime g_lastDecisionTime = 0;
+string   g_lastDecisionAction = "-";
 
 //+------------------------------------------------------------------+
 //| Expert initialization                                             |
@@ -47,6 +63,8 @@ void OnTick()
 {
    // 1) Poll and execute latest async decision (if any).
    PollDecision();
+   PollOpsHealth();
+   RenderStatusPanel();
 
    // 2) Push fresh signal on cadence (fire-and-forget).
    datetime now = TimeCurrent();
@@ -131,6 +149,7 @@ string BuildSignalPayload()
 string RequestAgent(string method, string endpoint, string payload)
 {
    string url = BridgeHost + endpoint;
+   g_lastHTTPEndpoint = endpoint;
    string headers = "Content-Type: application/json\r\n";
    if(BridgeAuthToken != "")
       headers += "X-Phantom-Bridge-Token: " + BridgeAuthToken + "\r\n";
@@ -158,6 +177,8 @@ string RequestAgent(string method, string endpoint, string payload)
    if(res == -1)
    {
       int err = GetLastError();
+      g_lastHTTPStatus = -1;
+      g_lastHTTPErrorClass = "network";
       if(err == 4014)
          Print("PhantomClaw: Add ", BridgeHost, " to Tools > Options > Expert Advisors > Allow WebRequest for listed URL");
       else
@@ -165,7 +186,19 @@ string RequestAgent(string method, string endpoint, string payload)
       return "";
    }
 
-   return CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+   g_lastHTTPStatus = res;
+   g_lastHTTPErrorClass = "";
+   string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+   if(res == 401)
+      g_lastHTTPErrorClass = "unauthorized";
+   else if(res == 400 && StringFind(body, "incompatible contract version") >= 0)
+      g_lastHTTPErrorClass = "contract_mismatch";
+   else if(res >= 500)
+      g_lastHTTPErrorClass = "server_error";
+   else if(res >= 400)
+      g_lastHTTPErrorClass = "client_error";
+
+   return body;
 }
 
 string PostToAgent(string endpoint, string payload)
@@ -189,6 +222,62 @@ void PollDecision()
    ProcessResponse(response);
 }
 
+void PollOpsHealth()
+{
+   datetime now = TimeCurrent();
+   if(now - g_lastOpsPollTime < 5) return;
+   g_lastOpsPollTime = now;
+
+   string response = GetFromAgent("/health/ops");
+   if(response == "") return;
+
+   g_opsOverallStatus = ExtractJSONString(response, "overall_status");
+   g_opsReasonCode = ExtractJSONString(response, "overall_reason_code");
+   g_opsEALinkStatus = ExtractJSONString(response, "ea_link_status");
+   g_opsAuthStatus = ExtractJSONString(response, "bridge_auth_status");
+   g_opsContractStatus = ExtractJSONString(response, "contract_compat_status");
+   g_opsDecisionStatus = ExtractJSONString(response, "decision_loop_status");
+   g_opsAIStatus = ExtractJSONString(response, "ai_health_status");
+   g_opsLastSignalAgeSec = (int)ExtractJSONDouble(response, "last_signal_age_sec");
+   g_opsQueueDepth = (int)ExtractJSONDouble(response, "queue_depth_active");
+   g_opsAuthFailures5m = (int)ExtractJSONDouble(response, "auth_failures_5m");
+}
+
+void RenderStatusPanel()
+{
+   string status = g_opsOverallStatus;
+   if(status == "") status = "UNKNOWN";
+   string reason = g_opsReasonCode;
+   if(reason == "") reason = "n/a";
+
+   string signalAge = "n/a";
+   if(g_opsLastSignalAgeSec >= 0)
+   {
+      if(g_opsLastSignalAgeSec >= 3600)
+         signalAge = IntegerToString(g_opsLastSignalAgeSec / 3600) + "h";
+      else if(g_opsLastSignalAgeSec >= 60)
+         signalAge = IntegerToString(g_opsLastSignalAgeSec / 60) + "m";
+      else
+         signalAge = IntegerToString(g_opsLastSignalAgeSec) + "s";
+   }
+
+   string decisionAge = "n/a";
+   if(g_lastDecisionTime > 0)
+      decisionAge = IntegerToString((int)(TimeCurrent() - g_lastDecisionTime)) + "s";
+
+   string txt = "PhantomClaw EA Bridge\n";
+   txt += "Overall: " + status + " (" + reason + ")\n";
+   txt += "EA Link/Auth/Contract: " + g_opsEALinkStatus + " / " + g_opsAuthStatus + " / " + g_opsContractStatus + "\n";
+   txt += "AI/Decision: " + g_opsAIStatus + " / " + g_opsDecisionStatus + " | Queue=" + IntegerToString(g_opsQueueDepth) + "\n";
+   txt += "Last Signal ReqID: " + g_lastRequestID + " | Signal Age: " + signalAge + "\n";
+   txt += "Last Decision: " + g_lastDecisionAction + " (" + decisionAge + " ago)\n";
+   txt += "HTTP " + IntegerToString(g_lastHTTPStatus) + " @ " + g_lastHTTPEndpoint;
+   if(g_lastHTTPErrorClass != "")
+      txt += " [" + g_lastHTTPErrorClass + "]";
+   txt += "\nAuth failures (5m): " + IntegerToString(g_opsAuthFailures5m);
+   Comment(txt);
+}
+
 //+------------------------------------------------------------------+
 //| Process agent response — execute pending order actions            |
 //+------------------------------------------------------------------+
@@ -203,6 +292,8 @@ void ProcessResponse(string response)
       Print("PhantomClaw: invalid response payload (missing action): ", response);
       return;
    }
+   g_lastDecisionAction = action;
+   g_lastDecisionTime = TimeCurrent();
 
    if(action == "HOLD") return;
 

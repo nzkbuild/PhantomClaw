@@ -30,6 +30,7 @@ type Dependencies struct {
 	Strategy    *memory.StrategyManager
 	Chat        ChatResponder
 	BridgeProbe BridgeProbeFunc
+	OpsProbe    func(ctx context.Context) (map[string]any, error)
 	Diag        RuntimeDiagFunc
 	LLMCurrent  func() string
 	LLMSwitch   func(target string) (string, error)
@@ -236,6 +237,42 @@ func (tb *Bot) handleStatus(ctx context.Context, b *bot.Bot, update *models.Upda
 	stats := tb.deps.Risk.Stats()
 	session := tb.deps.Scheduler.CurrentSession()
 
+	opsBlock := ""
+	if tb.deps.OpsProbe != nil {
+		opsCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		ops, err := tb.deps.OpsProbe(opsCtx)
+		cancel()
+		if err != nil {
+			opsBlock = fmt.Sprintf("\nOps: unavailable (%v)", err)
+		} else {
+			overall := asMap(ops["overall"])
+			ea := asMap(ops["ea_link"])
+			decision := asMap(ops["decision_loop"])
+			bridgeAuth := asMap(ops["bridge_auth"])
+			eaMetrics := asMap(ea["metrics"])
+			decisionMetrics := asMap(decision["metrics"])
+			authMetrics := asMap(bridgeAuth["metrics"])
+
+			overallStatus := asString(overall["status"], "unknown")
+			reasonCode := asString(overall["reason_code"], "unknown")
+			lastSignalAge := asInt64(eaMetrics["last_signal_age_sec"], -1)
+			queueDepth := asInt64(decisionMetrics["queue_depth_active"], -1)
+			authFailures := asInt64(authMetrics["auth_failures_5m"], -1)
+
+			opsBlock = fmt.Sprintf("\n\n*Ops*\n"+
+				"Overall: %s (%s)\n"+
+				"EA signal age: %s\n"+
+				"Queue depth: %s\n"+
+				"Auth failures (5m): %s",
+				overallStatus,
+				reasonCode,
+				fmtAge(lastSignalAge),
+				fmtMetric(queueDepth),
+				fmtMetric(authFailures),
+			)
+		}
+	}
+
 	msg := fmt.Sprintf("🤖 *PhantomClaw Status*\n\n"+
 		"Mode: %s\n"+
 		"Session: %s\n"+
@@ -249,7 +286,7 @@ func (tb *Bot) handleStatus(ctx context.Context, b *bot.Bot, update *models.Upda
 		stats.DailyLoss,
 		stats.ProfitableTrades, stats.RampUpTarget,
 		tb.deps.Scheduler.IsWeekend(),
-	)
+	) + opsBlock
 
 	tb.sendReply(ctx, b, update.Message.Chat.ID, msg, true)
 }
@@ -723,4 +760,52 @@ func (tb *Bot) handleUnknown(ctx context.Context, b *bot.Bot, update *models.Upd
 	}
 
 	tb.sendReply(ctx, b, update.Message.Chat.ID, "🤖 Bot is online. Use /help to see available commands.", false)
+}
+
+func asMap(v any) map[string]any {
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
+	return map[string]any{}
+}
+
+func asString(v any, fallback string) string {
+	s, ok := v.(string)
+	if !ok || strings.TrimSpace(s) == "" {
+		return fallback
+	}
+	return s
+}
+
+func asInt64(v any, fallback int64) int64 {
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	default:
+		return fallback
+	}
+}
+
+func fmtAge(seconds int64) string {
+	if seconds < 0 {
+		return "n/a"
+	}
+	if seconds >= 3600 {
+		return fmt.Sprintf("%dh", seconds/3600)
+	}
+	if seconds >= 60 {
+		return fmt.Sprintf("%dm", seconds/60)
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
+func fmtMetric(v int64) string {
+	if v < 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%d", v)
 }

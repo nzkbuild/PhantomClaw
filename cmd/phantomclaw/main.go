@@ -158,6 +158,32 @@ func makeRuntimeDiag(baseURL, authToken string, providerCount int, db *memory.DB
 	}
 }
 
+func makeBridgeOpsProbe(baseURL, authToken string) func(ctx context.Context) (map[string]any, error) {
+	return func(ctx context.Context) (map[string]any, error) {
+		client := &http.Client{Timeout: 1500 * time.Millisecond}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/health/ops", nil)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(authToken) != "" {
+			req.Header.Set("X-Phantom-Bridge-Token", authToken)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("ops status %d", resp.StatusCode)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	}
+}
+
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	flag.Parse()
@@ -444,6 +470,7 @@ func main() {
 	} else {
 		logger.Info("bridge: auth token enabled for bridge endpoints")
 	}
+	opsProbe := makeBridgeOpsProbe(bridgeURL, bridgeAuthToken)
 
 	bridgeServer := bridge.NewServer(
 		cfg.Bridge.Host,
@@ -623,6 +650,7 @@ func main() {
 			Strategy:    strategyMgr,
 			Chat:        brain,
 			BridgeProbe: makeBridgeProbe(bridgeURL, bridgeAuthToken),
+			OpsProbe:    opsProbe,
 			Diag:        makeRuntimeDiag(bridgeURL, bridgeAuthToken, len(providers), db),
 			LLMCurrent:  llmCurrent,
 			LLMSwitch:   llmSwitch,
@@ -836,6 +864,9 @@ func main() {
 			},
 			Diagnostics: func(ctx context.Context) (map[string]any, error) {
 				return diagnosticsSnapshot(), nil
+			},
+			Ops: func(ctx context.Context) (map[string]any, error) {
+				return opsProbe(ctx)
 			},
 			Logs: func(ctx context.Context, query bridge.LogQuery) (map[string]any, error) {
 				rows, err := logging.QueryJSONLogFile(logFilePath, logging.Query{

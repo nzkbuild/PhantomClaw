@@ -875,6 +875,7 @@
         <div class="breadcrumb">PhantomClaw / <span id="viewLabel">Control Deck</span></div>
       </div>
       <div class="topbar-right">
+        <span id="opsPill" class="pill pill-muted">OPS: —</span>
         <span id="streamPill" class="pill pill-warn">POLL</span>
         <span id="modePill" class="pill pill-muted">—</span>
         <span id="sessionPill" class="pill pill-muted">—</span>
@@ -945,6 +946,7 @@
           <div class="card col-8">
             <div class="sec-header">
               <div class="sec-title">Recent Decisions</div>
+              <div class="sec-meta" id="deckDecisionMeta">fresh —</div>
             </div>
             <div class="toolbar">
               <input class="tb-inp" id="deckSymbol" placeholder="Symbol filter…" style="width:160px" />
@@ -1085,12 +1087,23 @@
 
       <!-- ░░ VIEW: DIAGNOSTICS ░░ -->
       <div class="view" id="view-diagnostics">
-        <div class="card">
-          <div class="sec-header">
-            <div class="sec-title">System Diagnostics</div>
+        <div class="grid">
+          <div class="card col-4">
+            <div class="sec-header">
+              <div class="sec-title">Operations Truth</div>
+            </div>
+            <div id="opsContent">
+              <div class="tbl-empty">Loading…</div>
+            </div>
           </div>
-          <div id="diagContent">
-            <div class="tbl-empty">Loading…</div>
+          <div class="card col-8">
+            <div class="sec-header">
+              <div class="sec-title">System Diagnostics</div>
+              <div class="sec-meta" id="diagMeta">fresh —</div>
+            </div>
+            <div id="diagContent">
+              <div class="tbl-empty">Loading…</div>
+            </div>
           </div>
         </div>
       </div>
@@ -1100,6 +1113,7 @@
         <div class="card">
           <div class="sec-header">
             <div class="sec-title">Live Logs</div>
+            <div class="sec-meta" id="logsMeta">fresh —</div>
           </div>
           <div class="toolbar">
             <select class="tb-inp tb-sel" id="logLevel">
@@ -1138,7 +1152,8 @@
     }
 
     // ── STATE ─────────────────────────────────────────────────────────────
-    let lastLogTs = '', pollTimer = null, nonStreamTimer = null, evtSource = null, streamLive = false, snapData = {}, diagData = {};
+    let lastLogTs = '', pollTimer = null, nonStreamTimer = null, evtSource = null, streamLive = false, snapData = {}, diagData = {}, opsData = {};
+    const freshAt = { snapshot: 0, diagnostics: 0, ops: 0, decisions: 0, logs: 0 };
     let equityChart = null, equityChartFull = null, equitySeries = null, equitySeriesFull = null;
 
     // ── NAVIGATION ────────────────────────────────────────────────────────
@@ -1213,9 +1228,48 @@
       el.textContent = upper;
     }
 
+    function setOpsPill(status) {
+      const el = $('opsPill');
+      if (!el) return;
+      const s = (status || '').toUpperCase();
+      if (s === 'GREEN') {
+        el.className = 'pill pill-ok';
+      } else if (s === 'AMBER') {
+        el.className = 'pill pill-amber';
+      } else if (s === 'RED') {
+        el.className = 'pill pill-bad';
+      } else {
+        el.className = 'pill pill-muted';
+      }
+      el.textContent = `OPS: ${s || '—'}`;
+    }
+
+    function touchFresh(key) {
+      freshAt[key] = Date.now();
+      updateFreshnessLabels();
+    }
+
+    function ageLabel(ts) {
+      if (!ts) return '—';
+      const sec = Math.max(0, Math.round((Date.now() - ts) / 1000));
+      if (sec >= 3600) return Math.floor(sec / 3600) + 'h';
+      if (sec >= 60) return Math.floor(sec / 60) + 'm';
+      return sec + 's';
+    }
+
+    function updateFreshnessLabels() {
+      const diagMeta = $('diagMeta');
+      if (diagMeta) diagMeta.textContent = 'fresh ' + ageLabel(freshAt.diagnostics);
+      const logsMeta = $('logsMeta');
+      if (logsMeta) logsMeta.textContent = 'fresh ' + ageLabel(freshAt.logs);
+      const decMeta = $('deckDecisionMeta');
+      if (decMeta) decMeta.textContent = 'fresh ' + ageLabel(freshAt.decisions);
+    }
+
     // ── SNAPSHOT ──────────────────────────────────────────────────────────
     function renderSnapshot(d) {
       snapData = d || {};
+      touchFresh('snapshot');
 
       // Mode
       const mode = (d.mode || '—').toUpperCase();
@@ -1448,6 +1502,7 @@
         const d = await api(`/api/decisions?limit=${lim}${sym ? '&symbol=' + encodeURIComponent(sym) : ''}`);
         renderDecisionRows($('decisionRows'), d.decisions || []);
         renderDecisionRows($('deckDecisionRows'), (d.decisions || []).slice(0, 20));
+        touchFresh('decisions');
       } catch (e) { }
     }
 
@@ -1456,10 +1511,89 @@
     $('deckSymbol').addEventListener('change', loadDecisions);
 
     // ── DIAGNOSTICS ───────────────────────────────────────────────────────
+    function renderOps(d) {
+      opsData = d || {};
+      const el = $('opsContent');
+      if (!el || !d || Object.keys(d).length === 0) {
+        if (el) el.innerHTML = '<div class="tbl-empty">No ops data</div>';
+        setOpsPill('');
+        return;
+      }
+
+      const overall = d.overall || {};
+      const status = (overall.status || '').toUpperCase();
+      setOpsPill(status);
+
+      const overallReason = overall.reason_code || '—';
+      const overallMsg = overall.message || '—';
+      const ea = d.ea_link || {};
+      const eaMetrics = ea.metrics || {};
+      const decision = d.decision_loop || {};
+      const decisionMetrics = decision.metrics || {};
+      const auth = d.bridge_auth || {};
+      const authMetrics = auth.metrics || {};
+      const contractCompat = d.contract_compat || {};
+
+      el.innerHTML = `
+      <div class="diag-section">
+        <div class="diag-title">Overall</div>
+        <div class="diag-grid">
+          ${diagItem('Status', status || '—', status === 'GREEN' ? 'var(--ok)' : status === 'AMBER' ? 'var(--warn)' : status === 'RED' ? 'var(--bad)' : '')}
+          ${diagItem('Reason', overallReason)}
+          ${diagItem('Message', overallMsg)}
+        </div>
+      </div>
+      <div class="diag-section">
+        <div class="diag-title">Flow</div>
+        <div class="diag-grid">
+          ${diagItem('EA Link', (ea.status || '—').toUpperCase())}
+          ${diagItem('Last Signal Age', ageValue(eaMetrics.last_signal_age_sec))}
+          ${diagItem('Decision Loop', (decision.status || '—').toUpperCase())}
+          ${diagItem('Queue Depth', metricValue(decisionMetrics.queue_depth_active))}
+          ${diagItem('Ready p95', msValue(decisionMetrics.decision_ready_latency_p95_ms))}
+          ${diagItem('Consume p95', msValue(decisionMetrics.decision_consume_latency_p95_ms))}
+        </div>
+      </div>
+      <div class="diag-section">
+        <div class="diag-title">Auth & Contract</div>
+        <div class="diag-grid">
+          ${diagItem('Bridge Auth', (auth.status || '—').toUpperCase())}
+          ${diagItem('Auth failures (5m)', metricValue(authMetrics.auth_failures_5m))}
+          ${diagItem('Contract', (contractCompat.status || '—').toUpperCase())}
+          ${diagItem('Contract mismatch (5m)', metricValue((contractCompat.metrics || {}).contract_mismatch_5m))}
+        </div>
+      </div>`;
+    }
+
+    function metricValue(v) {
+      return v == null ? '—' : String(v);
+    }
+
+    function msValue(v) {
+      if (v == null) return '—';
+      const num = Number(v);
+      if (!Number.isFinite(num)) return '—';
+      return Math.round(num) + 'ms';
+    }
+
+    function ageValue(v) {
+      if (v == null) return '—';
+      const sec = Number(v);
+      if (!Number.isFinite(sec) || sec < 0) return 'n/a';
+      if (sec >= 3600) return Math.floor(sec / 3600) + 'h';
+      if (sec >= 60) return Math.floor(sec / 60) + 'm';
+      return Math.floor(sec) + 's';
+    }
+
     function renderDiagnostics(d) {
       diagData = d || {};
+      touchFresh('diagnostics');
       const el = $('diagContent');
-      if (!el || !d || Object.keys(d).length === 0) { if (el) el.innerHTML = '<div class="tbl-empty">No diagnostics</div>'; return; }
+      if (!el || !d || Object.keys(d).length === 0) {
+        if (el) el.innerHTML = '<div class="tbl-empty">No diagnostics</div>';
+        renderOps(opsData);
+        return;
+      }
 
       const sections = [];
 
@@ -1494,6 +1628,7 @@
 
       renderProviders($('deckProviders'), d);
       renderProvidersDetail(d);
+      renderOps(opsData);
     }
 
     function diagItem(k, v, color) {
@@ -1506,6 +1641,7 @@
     // ── LOGS ──────────────────────────────────────────────────────────────
     function renderLogs(rows) {
       if (!Array.isArray(rows) || !rows.length) return;
+      touchFresh('logs');
       lastLogTs = rows[rows.length - 1]?.ts || lastLogTs;
       const box = $('logs'), autoScroll = $('logAutoScroll').checked;
       const frag = rows.map(l => {
@@ -1546,6 +1682,14 @@
         const d = await api('/api/logs?' + q);
         renderLogs(d.logs || []);
       } catch (e) { }
+    }
+
+    async function fetchOps() {
+      try {
+        const d = await api('/api/ops');
+        touchFresh('ops');
+        renderOps(d);
+      } catch (_) { }
     }
 
     $('modelSwitchBtn').addEventListener('click', switchPrimaryModel);
@@ -1607,6 +1751,14 @@
         } catch (_) { }
       });
 
+      src.addEventListener('ops', (ev) => {
+        try {
+          const payload = JSON.parse(ev.data || '{}');
+          touchFresh('ops');
+          renderOps(payload);
+        } catch (_) { }
+      });
+
       src.onerror = () => {
         streamLive = false;
         setStreamPill('POLL');
@@ -1629,12 +1781,15 @@
     async function refreshAll() {
       const ts = $('syncTs');
       try {
-        const [snap, diag] = await Promise.all([
+        const [snap, diag, ops] = await Promise.all([
           api('/api/snapshot'),
           api('/api/diagnostics'),
+          api('/api/ops'),
         ]);
         renderSnapshot(snap);
         renderDiagnostics(diag);
+        touchFresh('ops');
+        renderOps(ops);
 
         // Equity mini chart
         if (!equityChart) initEquityChart();
@@ -1667,6 +1822,9 @@
         renderDiagnostics(diag);
       } catch (_) { }
       try {
+        await fetchOps();
+      } catch (_) { }
+      try {
         const eq = await api('/api/equity?days=30');
         const pts = buildEquityPoints(eq.points);
         if (!equityChart) initEquityChart();
@@ -1684,6 +1842,8 @@
 
     // ── INIT ──────────────────────────────────────────────────────────────
     (function init() {
+      setInterval(updateFreshnessLabels, 1000);
+      setOpsPill('');
       const hash = (window.location.hash || '').replace('#', '');
       if (hash && VIEW_LABELS[hash]) navigate(hash);
       window.addEventListener('hashchange', () => {

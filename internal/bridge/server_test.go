@@ -612,6 +612,60 @@ func TestHealthUsesConfiguredVersion(t *testing.T) {
 	}
 }
 
+func TestBridgeOpsHealthEndpoint(t *testing.T) {
+	SetVersion("9.9.9-test")
+	SetContractVersion("v3")
+	s := NewServer("127.0.0.1", 0, nil, nil, nil, "bridge-secret")
+
+	// Trigger an auth failure so /health/ops can report it.
+	unauthRec := httptest.NewRecorder()
+	unauthReq := httptest.NewRequest(http.MethodGet, "/decision?symbol=EURUSD", nil)
+	s.handleDecision(unauthRec, unauthReq)
+	if unauthRec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d, want=%d", unauthRec.Code, http.StatusUnauthorized)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health/ops", nil)
+	req.Header.Set(bridgeAuthHeader, "bridge-secret")
+	req.Header.Set(contractVersionHeader, "v3")
+	s.handleOpsHealth(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ops health status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode ops payload: %v", err)
+	}
+	if payload["service"] != "phantomclaw" {
+		t.Fatalf("service=%v, want=phantomclaw", payload["service"])
+	}
+	overall, ok := payload["overall"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing overall section: %#v", payload["overall"])
+	}
+	if _, ok := overall["status"].(string); !ok {
+		t.Fatalf("overall.status missing: %#v", overall)
+	}
+
+	bridgeAuth, ok := payload["bridge_auth"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing bridge_auth section: %#v", payload["bridge_auth"])
+	}
+	metrics, ok := bridgeAuth["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("bridge_auth.metrics missing: %#v", bridgeAuth["metrics"])
+	}
+	authFailuresRaw, ok := metrics["auth_failures_5m"].(float64)
+	if !ok {
+		t.Fatalf("auth_failures_5m missing: %#v", metrics["auth_failures_5m"])
+	}
+	if authFailuresRaw < 1 {
+		t.Fatalf("auth_failures_5m=%v, want >= 1", authFailuresRaw)
+	}
+}
+
 func TestBridgeRejectsIncompatibleContractVersion(t *testing.T) {
 	SetContractVersion("v3")
 	s := NewServer("127.0.0.1", 0, nil, nil, nil, "")

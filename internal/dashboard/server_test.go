@@ -160,6 +160,31 @@ func TestDashboardAnalyticsEndpointDefaultsDays(t *testing.T) {
 	}
 }
 
+func TestDashboardOpsEndpoint(t *testing.T) {
+	s := New("127.0.0.1", 8080, Dependencies{
+		Ops: func(ctx context.Context) (map[string]any, error) {
+			return map[string]any{
+				"overall": map[string]any{"status": "GREEN"},
+			}, nil
+		},
+	}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/ops", nil)
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if _, ok := payload["overall"]; !ok {
+		t.Fatalf("missing overall field: %+v", payload)
+	}
+}
+
 func TestDashboardSwitchModelEndpoint(t *testing.T) {
 	var got string
 	s := New("127.0.0.1", 8080, Dependencies{
