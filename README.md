@@ -158,6 +158,9 @@ You should see:
   Bridge       ✓  127.0.0.1:8765
   Dashboard    ✓  http://127.0.0.1:8080
   Telegram     ✓  connected
+  SSE Push     ✓  /api/events (live stream)
+  Model Switch ✓  POST /api/switch-model
+  API Endpoints ✓  11 routes registered
   Hot Reload   ✓  watching config.yaml
   ──────────────────────────────────────
   Ready. Waiting for EA signals...
@@ -180,7 +183,7 @@ PhantomClaw includes a **Bloomberg-inspired control deck** accessible at `http:/
 | **Decisions** | Filterable decision history with action badges and status |
 | **Analytics** | Win rate, total/avg P&L, per-pair breakdown table |
 | **Providers** | LLM provider status, active primary indicator, model switcher |
-| **Diagnostics** | Component health, risk engine status, structured data |
+| **Diagnostics** | Operations Truth (`GREEN/AMBER/RED`), reason codes, component health, freshness labels |
 | **Live Logs** | Rolling log stream with level/component/message filters |
 
 ### Configuration
@@ -205,8 +208,9 @@ dashboard:
 | GET | `/api/decisions?limit=200&symbol=XAUUSD` | Decision history |
 | GET | `/api/sessions?limit=100&pair=XAUUSD` | Conversation/session turns |
 | GET | `/api/diagnostics` | Component health (secrets auto-redacted) |
+| GET | `/api/ops` | Operational truth snapshot for dashboard/Telegram |
 | GET | `/api/logs?level=error&limit=100` | Filtered log entries |
-| GET | `/api/events` | SSE stream (snapshot + logs every 3s) |
+| GET | `/api/events` | SSE stream (snapshot + logs + ops every 3s) |
 | POST | `/api/switch-model?name=claude` | Switch primary LLM provider |
 
 ---
@@ -244,8 +248,9 @@ Only the configured `telegram.chat_id` is authorized to control the bot.
 ```
                     You (Telegram)
                          ↕
-   MT5 EA ──signals──→ PhantomClaw Bot ←──→ Dashboard (SSE)
-      ↑                    │                  http://127.0.0.1:8080
+   MT5 EA ──signals──→ PhantomClaw Bot ←──→ Dashboard (SSE + /api/ops)
+      ↑        ↕           │                  http://127.0.0.1:8080
+      └─ /health/ops ──────┘
       └───── decisions ────┘
                          ↕
                     AI (Claude/GPT-4o)
@@ -272,6 +277,7 @@ Only the configured `telegram.chat_id` is authorized to control the bot.
 - decision lifecycle: `pending -> delivered -> consumed|expired` (with `consume=1` or `POST /decision/consume`).
 - bridge auth: if `bridge.auth_token` is set, EA must send header `X-Phantom-Bridge-Token` with matching value.
 - bridge contract versioning: EA sends `X-Phantom-Bridge-Contract`; major-version mismatch is rejected with HTTP 400.
+- operational truth endpoint: `GET /health/ops` returns canonical system health sections + reason codes + latency/freshness metrics.
 - Telegram ACL: only configured `telegram.chat_id` is authorized for inbound command handling.
 - Telegram chat mode: `/chat on` routes non-command text to the agent brain, `/chat off` restores command-only behavior.
 - Runtime model controls: `/model status|list|set <provider_or_alias[:model]>` and bridge `GET /models`.
@@ -337,6 +343,8 @@ PhantomClaw has multiple layers of protection — **the AI cannot override these
 | **Read-only DB** | Dashboard queries use a separate read-only SQLite connection |
 | **Loopback guard** | Dashboard auto-binds to 127.0.0.1 if exposed without auth |
 | **Queued model switches** | LLM provider changes are deferred while a signal is in-flight |
+| **Operational truth** | EA, dashboard, and Telegram share health state from `/health/ops` |
+| **EA status panel** | On-chart panel shows link/auth/contract/decision/HTTP health in real time |
 
 ---
 
@@ -365,6 +373,7 @@ PhantomClaw/
 ├── config.yaml              ← Your local settings (gitignored)
 ├── VERSION                  ← Current version (4.1.0)
 ├── v4.1_blueprint.md        ← Hardening roadmap
+├── v4.2_blueprint.md        ← Observability & operational-truth roadmap
 ├── scripts/
 │   └── phantomclaw.ps1      ← Build/run/test menu script
 ├── ea/

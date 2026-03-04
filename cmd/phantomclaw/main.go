@@ -1058,7 +1058,7 @@ func main() {
 	if dashboardServer != nil {
 		banner.Step("SSE Push", logging.StatusOK, "/api/events (live stream)")
 		banner.Step("Model Switch", logging.StatusOK, "POST /api/switch-model")
-		apiCount := 10 // snapshot, decisions, sessions, diagnostics, logs, equity, analytics, events, switch-model, index
+		apiCount := 11 // snapshot, decisions, sessions, diagnostics, ops, logs, equity, analytics, events, switch-model, index
 		banner.Step("API Endpoints", logging.StatusOK, fmt.Sprintf("%d routes registered", apiCount))
 	}
 

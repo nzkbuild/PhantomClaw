@@ -7,6 +7,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 ## [Unreleased]
 
 ### Added
+- Bridge operational truth endpoint `GET /health/ops` with canonical sectioned status (`overall`, `ea_link`, `bridge_auth`, `contract_compat`, `decision_loop`, `ai_health`, `dashboard_sync`, `data_freshness`)
+- Bridge telemetry for ops health: auth failure counters, contract mismatch counters, signal ACK latency, decision-ready latency, decision-consume latency, queue age/depth metrics
+- Flat ops keys in `/health/ops` payload for EA-friendly parsing (`overall_status`, `overall_reason_code`, `*_status`, age and queue metrics)
+- Dashboard API endpoint `GET /api/ops`
+- Dashboard SSE `ops` event on `/api/events` stream
+- Dashboard Operations Truth panel + topbar ops pill + freshness labels for diagnostics/logs/decisions
+- Telegram `/status` extension with ops summary block (overall status, reason code, EA signal age, queue depth, auth failures)
+- EA on-chart status panel with periodic `/health/ops` polling and HTTP error classification
+- Bridge tests for ops endpoint behavior and v4.2 degradation reason-code paths (`AUTH_UNAUTHORIZED`, `CONTRACT_MISMATCH`, `QUEUE_STUCK`)
 - Bridge request correlation support via `request_id` on `/signal` and `/decision`
 - Bridge tests for correlated decision fetch and backward-compatible symbol polling
 - Durable `pending_decisions` SQLite table and DB APIs for bridge decision persistence
@@ -34,6 +43,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Memory tests ensuring trade summary, equity curve, and pair analytics exclude open trades
 
 ### Changed
+- Dashboard route surface increased to include `/api/ops` (11 dashboard routes total)
+- README synced with operational-truth flow and ops endpoints (`/health/ops`, `/api/ops`, SSE `ops`)
 - EA now attaches `request_id` in signal payloads and includes it when polling `/decision`
 - Bridge now generates a request ID when absent to preserve compatibility with older EA behavior
 - Bridge `NewServer` now accepts memory DB handle and persists pending decisions with TTL
