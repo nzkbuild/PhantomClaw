@@ -77,6 +77,20 @@ func (b *Banner) Ready(message string) {
 	fmt.Fprintf(b.w, "  %s%s%s\n\n", colorGreen, message, colorReset)
 }
 
+// Shutdown prints a formatted shutdown block.
+func (b *Banner) Shutdown(signal string) {
+	fmt.Fprintln(b.w)
+	b.Divider()
+	fmt.Fprintf(b.w, "  %s⏻  Shutting down...%s  (%s)\n", colorYellow, colorReset, signal)
+}
+
+// ShutdownComplete prints the final shutdown message.
+func (b *Banner) ShutdownComplete() {
+	fmt.Fprintf(b.w, "  %s✓  Shutdown complete%s\n", colorGreen, colorReset)
+	b.Divider()
+	fmt.Fprintln(b.w)
+}
+
 func (b *Banner) resolveStatus(status string) (string, string) {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case StatusOK:

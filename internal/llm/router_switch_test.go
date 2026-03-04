@@ -140,3 +140,36 @@ func TestSetPrimaryQueued_Race(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestProviderByName_CaseInsensitive(t *testing.T) {
+	a := &stubProvider{"Alpha"}
+	b := &stubProvider{"beta"}
+	r := newTestRouter(a, b)
+
+	got := r.ProviderByName("ALPHA")
+	if got == nil || got.Name() != "Alpha" {
+		t.Fatalf("ProviderByName(ALPHA) = %v, want Alpha", got)
+	}
+	if miss := r.ProviderByName("does-not-exist"); miss != nil {
+		t.Fatalf("ProviderByName for missing provider should return nil, got %v", miss)
+	}
+}
+
+func TestProviderStatus_UnknownUntilFirstAttempt(t *testing.T) {
+	a := &stubProvider{"alpha"}
+	r := newTestRouter(a)
+
+	status := r.ProviderStatus()
+	if status["alpha"] != "unknown" {
+		t.Fatalf("initial status=%q, want unknown", status["alpha"])
+	}
+
+	_, err := r.Chat(context.Background(), []Message{{Role: "user", Content: "ping"}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	status = r.ProviderStatus()
+	if status["alpha"] != "healthy" {
+		t.Fatalf("status after success=%q, want healthy", status["alpha"])
+	}
+}

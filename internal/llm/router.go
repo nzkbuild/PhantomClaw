@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,6 +17,7 @@ type Router struct {
 	aliases   map[string]string    // "fast" → provider name
 	cooldowns map[string]time.Time // provider name → cooldown expiry
 	failures  map[string]int       // provider name → consecutive failure count
+	seen      map[string]bool      // provider name -> has attempted at least once
 
 	maxFailures    int           // consecutive failures before cooldown (default 3)
 	cooldownPeriod time.Duration // how long a cooled-down provider waits (default 5 min)
@@ -65,6 +67,7 @@ func NewRouter(cfg RouterConfig) *Router {
 		aliases:        aliases,
 		cooldowns:      make(map[string]time.Time),
 		failures:       make(map[string]int),
+		seen:           make(map[string]bool),
 		maxFailures:    maxFail,
 		cooldownPeriod: cooldown,
 		attemptTimeout: attemptTimeout,
@@ -201,6 +204,19 @@ func (r *Router) SetPrimary(p Provider) {
 	r.applyPrimaryLocked(p)
 }
 
+// ProviderByName returns the provider whose Name() matches (case-insensitive), or nil.
+func (r *Router) ProviderByName(name string) Provider {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, p := range r.providers {
+		if strings.ToLower(p.Name()) == lower {
+			return p
+		}
+	}
+	return nil
+}
+
 // SetPrimaryQueued switches the primary provider safely with respect to in-flight
 // signals (#7).  If a signal is currently being processed the switch is deferred
 // until that signal completes.  Returns true if the switch was applied immediately,
@@ -272,6 +288,10 @@ func (r *Router) ProviderStatus() map[string]string {
 	status := make(map[string]string)
 	for _, p := range r.providers {
 		name := p.Name()
+		if !r.seen[name] {
+			status[name] = "unknown"
+			continue
+		}
 		if r.isCoolingDownLocked(name) {
 			remaining := time.Until(r.cooldowns[name]).Round(time.Second)
 			status[name] = fmt.Sprintf("cooldown (%s remaining)", remaining)
@@ -317,6 +337,7 @@ func (r *Router) SetProviders(providers []Provider) {
 	nextProviders := append([]Provider(nil), providers...)
 	nextFailures := make(map[string]int, len(nextProviders))
 	nextCooldowns := make(map[string]time.Time, len(nextProviders))
+	nextSeen := make(map[string]bool, len(nextProviders))
 	for _, p := range nextProviders {
 		name := p.Name()
 		if count, ok := r.failures[name]; ok {
@@ -325,11 +346,15 @@ func (r *Router) SetProviders(providers []Provider) {
 		if expiry, ok := r.cooldowns[name]; ok && time.Now().Before(expiry) {
 			nextCooldowns[name] = expiry
 		}
+		if seen, ok := r.seen[name]; ok {
+			nextSeen[name] = seen
+		}
 	}
 
 	r.providers = nextProviders
 	r.failures = nextFailures
 	r.cooldowns = nextCooldowns
+	r.seen = nextSeen
 }
 
 // --- Internal helpers ---
@@ -339,6 +364,7 @@ func (r *Router) handleFailure(provider string, err error) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.seen[provider] = true
 
 	if r.stickyPrimary && len(r.providers) > 0 && r.providers[0].Name() == provider {
 		r.failures[provider]++
@@ -383,6 +409,7 @@ func (r *Router) handleFailure(provider string, err error) {
 func (r *Router) recordSuccess(provider string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.seen[provider] = true
 	r.failures[provider] = 0
 	delete(r.cooldowns, provider)
 }

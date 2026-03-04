@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -877,6 +878,18 @@ func main() {
 					"pairs":   pairs,
 				}, nil
 			},
+			SwitchModel: func(ctx context.Context, name string) error {
+				if llmRouter == nil {
+					return fmt.Errorf("llm router not configured")
+				}
+				target := llmRouter.Resolve(strings.TrimSpace(name))
+				p := llmRouter.ProviderByName(target)
+				if p == nil {
+					return fmt.Errorf("unknown provider: %q", name)
+				}
+				llmRouter.SetPrimaryQueued(p)
+				return nil
+			},
 		}, authMiddleware)
 	}
 
@@ -1010,6 +1023,14 @@ func main() {
 		banner.Step("Telegram", logging.StatusFail, "no token (skipped)")
 	}
 
+	// Phase C features
+	if dashboardServer != nil {
+		banner.Step("SSE Push", logging.StatusOK, "/api/events (live stream)")
+		banner.Step("Model Switch", logging.StatusOK, "POST /api/switch-model")
+		apiCount := 10 // snapshot, decisions, sessions, diagnostics, logs, equity, analytics, events, switch-model, index
+		banner.Step("API Endpoints", logging.StatusOK, fmt.Sprintf("%d routes registered", apiCount))
+	}
+
 	banner.Step("Hot Reload", logging.StatusOK, "watching "+*configPath)
 
 	banner.Ready("Ready. Waiting for EA signals...")
@@ -1032,10 +1053,15 @@ func main() {
 
 	// --- Graceful shutdown ---
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	signals := []os.Signal{os.Interrupt}
+	// On Windows, avoid SIGTERM-triggered premature exits from parent-shell teardown.
+	if runtime.GOOS != "windows" {
+		signals = append(signals, syscall.SIGTERM)
+	}
+	signal.Notify(sigCh, signals...)
+	sig := <-sigCh
 
-	logger.Info("shutdown: stopping services...")
+	banner.Shutdown(sig.String())
 	cancel()
 	if err := bridgeServer.Stop(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Warnw("shutdown: bridge stop error", "error", err)
@@ -1047,7 +1073,7 @@ func main() {
 			logger.Warnw("shutdown: dashboard stop error", "error", err)
 		}
 	}
-	logger.Info("shutdown: complete")
+	banner.ShutdownComplete()
 }
 
 func firstAvailableTCPPort(host string, preferred int, attempts int) (int, error) {

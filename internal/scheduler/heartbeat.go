@@ -53,7 +53,6 @@ func (h *Heartbeat) Stop() {
 		h.ticker.Stop()
 	}
 	close(h.stop)
-	log.Println("heartbeat: stopped")
 }
 
 func (h *Heartbeat) check() {

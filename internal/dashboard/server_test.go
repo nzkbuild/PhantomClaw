@@ -83,6 +83,34 @@ func TestDashboardLogsEndpointParsesFilters(t *testing.T) {
 	}
 }
 
+func TestDashboardLogsEndpointParsesZapTimestampSince(t *testing.T) {
+	var got bridge.LogQuery
+	s := New("127.0.0.1", 8080, Dependencies{
+		Logs: func(ctx context.Context, query bridge.LogQuery) (map[string]any, error) {
+			got = query
+			return map[string]any{
+				"count": 0,
+				"logs":  []map[string]any{},
+			}, nil
+		},
+	}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/logs?since=2026-03-04T12:00:00.000+0800",
+		nil,
+	)
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got.Since.IsZero() {
+		t.Fatal("expected since to be parsed from zap timestamp format")
+	}
+}
+
 func TestDashboardEquityEndpointParsesDays(t *testing.T) {
 	gotDays := 0
 	s := New("127.0.0.1", 8080, Dependencies{
@@ -129,5 +157,44 @@ func TestDashboardAnalyticsEndpointDefaultsDays(t *testing.T) {
 	}
 	if gotDays != 30 {
 		t.Fatalf("days=%d, want default 30", gotDays)
+	}
+}
+
+func TestDashboardSwitchModelEndpoint(t *testing.T) {
+	var got string
+	s := New("127.0.0.1", 8080, Dependencies{
+		SwitchModel: func(ctx context.Context, name string) error {
+			got = name
+			return nil
+		},
+	}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/switch-model?name=groq", nil)
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got != "groq" {
+		t.Fatalf("switch name=%q, want groq", got)
+	}
+}
+
+func TestDashboardSSEEndpointSendsPing(t *testing.T) {
+	s := New("127.0.0.1", 8080, Dependencies{}, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: ping") {
+		t.Fatalf("expected SSE ping event, got body=%q", body)
 	}
 }

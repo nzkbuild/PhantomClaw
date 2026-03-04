@@ -277,6 +277,7 @@ body{font-family:'Space Grotesk',sans-serif;background:var(--bg);color:var(--tex
       <div class="breadcrumb">PhantomClaw / <span id="viewLabel">Control Deck</span></div>
     </div>
     <div class="topbar-right">
+      <span id="streamPill" class="pill pill-warn">POLL</span>
       <span id="modePill" class="pill pill-muted">—</span>
       <span id="sessionPill" class="pill pill-muted">—</span>
       <span id="syncTs" class="sync-ts">syncing…</span>
@@ -419,6 +420,11 @@ body{font-family:'Space Grotesk',sans-serif;background:var(--bg);color:var(--tex
     <div class="view" id="view-providers">
       <div class="card">
         <div class="sec-header"><div class="sec-title">LLM Provider Status</div></div>
+        <div class="toolbar">
+          <select class="tb-inp tb-sel" id="modelSwitchSel"></select>
+          <button class="tb-inp" id="modelSwitchBtn" type="button">Switch Primary</button>
+          <span class="sec-meta" id="modelSwitchMsg"></span>
+        </div>
         <div id="providersDetail"><div class="tbl-empty">Loading…</div></div>
       </div>
     </div>
@@ -472,7 +478,7 @@ async function api(url){
 }
 
 // ── STATE ─────────────────────────────────────────────────────────────
-let lastLogTs='', pollTimer=null, snapData={}, diagData={};
+let lastLogTs='', pollTimer=null, nonStreamTimer=null, evtSource=null, streamLive=false, snapData={}, diagData={};
 let equityChart=null, equityChartFull=null, equitySeries=null, equitySeriesFull=null;
 
 // ── NAVIGATION ────────────────────────────────────────────────────────
@@ -531,6 +537,20 @@ function provDot(status){
   if(status.startsWith('cooldown')) return 'var(--warn)';
   if(status.startsWith('degraded')) return 'var(--bad)';
   return 'var(--muted)';
+}
+
+function setStreamPill(mode){
+  const el=$('streamPill');
+  if(!el) return;
+  const upper=(mode||'POLL').toUpperCase();
+  if(upper==='SSE'){
+    el.className='pill pill-cyan';
+  }else if(upper==='RETRY'){
+    el.className='pill pill-amber';
+  }else{
+    el.className='pill pill-warn';
+  }
+  el.textContent=upper;
 }
 
 // ── SNAPSHOT ──────────────────────────────────────────────────────────
@@ -650,6 +670,56 @@ function renderProviders(el, diagInfo){
 
 function renderProvidersDetail(diagInfo){
   renderProviders($('providersDetail'),diagInfo);
+  updateModelSwitcher(diagInfo);
+}
+
+function updateModelSwitcher(diagInfo){
+  const sel=$('modelSwitchSel');
+  if(!sel) return;
+  const llm=(diagInfo&&diagInfo.llm)||{};
+  const current=(llm.current_provider||'').toString();
+  const statuses=llm.providers||{};
+  const names=Object.keys(statuses).sort((a,b)=>a.localeCompare(b));
+  if(!names.length){
+    sel.innerHTML='<option value="">No providers</option>';
+    sel.disabled=true;
+    $('modelSwitchBtn').disabled=true;
+    return;
+  }
+  sel.disabled=false;
+  $('modelSwitchBtn').disabled=false;
+  sel.innerHTML=names.map(name=>`<option value="${esc(name)}">${esc(name)}${name===current?' (current)':''}</option>`).join('');
+  sel.value = names.includes(current) ? current : names[0];
+}
+
+async function switchPrimaryModel(){
+  const sel=$('modelSwitchSel');
+  const msg=$('modelSwitchMsg');
+  if(!sel || !msg) return;
+  const name=(sel.value||'').trim();
+  if(!name) return;
+  if(!confirm(`Switch primary model to "${name}"?`)) return;
+
+  msg.textContent='switching...';
+  msg.style.color='var(--muted)';
+  try{
+    const r=await fetch('/api/switch-model',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name}),
+      cache:'no-store',
+    });
+    const payload=await r.json().catch(()=>({}));
+    if(!r.ok){
+      throw new Error(payload.error||`HTTP ${r.status}`);
+    }
+    msg.textContent=`queued: ${name}`;
+    msg.style.color='var(--ok)';
+    await refreshAll();
+  }catch(e){
+    msg.textContent=`error: ${e.message}`;
+    msg.style.color='var(--bad)';
+  }
 }
 
 // ── ANALYTICS ─────────────────────────────────────────────────────────
@@ -793,7 +863,15 @@ function renderLogs(rows){
 }
 
 ['logLevel','logComponent','logContains'].forEach(id=>{
-  $(id).addEventListener('change',()=>{lastLogTs='';$('logs').innerHTML='';fetchLogs();});
+  $(id).addEventListener('change',()=>{
+    lastLogTs='';
+    $('logs').innerHTML='';
+    if(evtSource || streamLive){
+      connectSSE();
+    }else{
+      fetchLogs();
+    }
+  });
 });
 
 async function fetchLogs(){
@@ -807,6 +885,83 @@ async function fetchLogs(){
     const d=await api('/api/logs?'+q);
     renderLogs(d.logs||[]);
   }catch(e){}
+}
+
+$('modelSwitchBtn').addEventListener('click', switchPrimaryModel);
+
+// ── SSE STREAM ────────────────────────────────────────────────────────
+function disconnectSSE(){
+  if(evtSource){
+    evtSource.close();
+    evtSource=null;
+  }
+}
+
+function sseURL(){
+  const q = new URLSearchParams();
+  const lvl=$('logLevel').value.trim();
+  const comp=$('logComponent').value.trim();
+  const cont=$('logContains').value.trim();
+  if(lvl) q.set('level', lvl);
+  if(comp) q.set('component', comp);
+  if(cont) q.set('contains', cont);
+  const qs=q.toString();
+  return '/api/events'+(qs?`?${qs}`:'');
+}
+
+function connectSSE(){
+  if(!window.EventSource){
+    streamLive=false;
+    setStreamPill('POLL');
+    startPollingFallback();
+    return;
+  }
+  disconnectSSE();
+  streamLive=false;
+  setStreamPill('RETRY');
+
+  const src=new EventSource(sseURL());
+  evtSource=src;
+
+  src.addEventListener('ping',()=>{
+    streamLive=true;
+    setStreamPill('SSE');
+    stopPollingFallback();
+  });
+
+  src.addEventListener('snapshot',(ev)=>{
+    try{
+      const snap=JSON.parse(ev.data||'{}');
+      renderSnapshot(snap);
+      $('syncTs').textContent='stream '+new Date().toLocaleTimeString('en-GB');
+      $('syncTs').className='sync-ts';
+    }catch(_){}
+  });
+
+  src.addEventListener('logs',(ev)=>{
+    try{
+      const payload=JSON.parse(ev.data||'{}');
+      const rows=Array.isArray(payload?.logs)?payload.logs:[];
+      renderLogs(rows);
+    }catch(_){}
+  });
+
+  src.onerror=()=>{
+    streamLive=false;
+    setStreamPill('POLL');
+    startPollingFallback();
+  };
+}
+
+function startPollingFallback(){
+  if(pollTimer) return;
+  pollTimer=setInterval(refreshAll,5000);
+}
+
+function stopPollingFallback(){
+  if(!pollTimer) return;
+  clearInterval(pollTimer);
+  pollTimer=null;
 }
 
 // ── MAIN POLL ─────────────────────────────────────────────────────────
@@ -845,6 +1000,27 @@ async function refreshAll(){
   }
 }
 
+async function refreshNonStreamData(){
+  try{
+    const diag = await api('/api/diagnostics');
+    renderDiagnostics(diag);
+  }catch(_){}
+  try{
+    const eq=await api('/api/equity?days=30');
+    const pts=buildEquityPoints(eq.points);
+    if(!equityChart) initEquityChart();
+    if(pts.length&&equitySeries) equitySeries.setData(pts);
+  }catch(_){}
+  try{
+    const an=await api('/api/analytics?days=30');
+    renderAnalyticsSummary(an.summary||{});
+    renderAnalyticsPairs(an.pairs||[]);
+  }catch(_){}
+  try{
+    await loadDecisions();
+  }catch(_){}
+}
+
 // ── INIT ──────────────────────────────────────────────────────────────
 (function init(){
   const hash=(window.location.hash||'').replace('#','');
@@ -854,7 +1030,8 @@ async function refreshAll(){
     if(h&&VIEW_LABELS[h]) navigate(h);
   });
   refreshAll();
-  pollTimer=setInterval(refreshAll,5000);
+  nonStreamTimer=setInterval(refreshNonStreamData,10000);
+  connectSSE();
 })();
 </script>
 </body>
