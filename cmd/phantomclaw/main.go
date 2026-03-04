@@ -457,6 +457,12 @@ func main() {
 				return &bridge.SignalResponse{Action: "HOLD", Reason: err.Error()}
 			}
 
+			// Mark signal as in-flight so model switches are queued, not applied mid-decision (#7).
+			if llmRouter != nil {
+				llmRouter.BeginSignal()
+				defer llmRouter.EndSignal()
+			}
+
 			// Reconcile risk engine snapshot from MT5 before evaluating the new signal.
 			riskEngine.SyncAccountSnapshot(req.Equity, req.OpenPos)
 			if brain == nil {
@@ -599,7 +605,10 @@ func main() {
 					llmMetaMu.Unlock()
 				}
 
-				llmRouter.SetPrimary(provider)
+				if applied := llmRouter.SetPrimaryQueued(provider); !applied {
+					return strings.TrimPrefix(llmRouter.Name(), "router:"),
+						fmt.Errorf("switch queued: will apply after current signal completes")
+				}
 				return strings.TrimPrefix(llmRouter.Name(), "router:"), nil
 			}
 		}

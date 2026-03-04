@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,6 +22,13 @@ type Router struct {
 	cooldownPeriod time.Duration // how long a cooled-down provider waits (default 5 min)
 	attemptTimeout time.Duration // max timeout budget for each provider attempt
 	stickyPrimary  bool          // when true, only primary provider is used
+
+	// Signal-in-flight guard (issue #7).
+	// signalDepth counts concurrent signals being processed.  pendingSwitch holds
+	// a provider that should become primary once no signal is in flight.
+	signalDepth   atomic.Int32
+	pendingMu     sync.Mutex
+	pendingSwitch Provider // nil when no switch is queued
 }
 
 // RouterConfig holds configuration for the smart router.
@@ -187,21 +195,73 @@ func (r *Router) ToolCall(ctx context.Context, messages []Message, tools []Tool)
 	return nil, fmt.Errorf("llm/router: all providers failed for ToolCall, last: %w", lastErr)
 }
 
-// SetPrimary moves a provider to the front of the list at runtime.
+// SetPrimary moves a provider to the front of the list at runtime (immediate, no guard).
 func (r *Router) SetPrimary(p Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.applyPrimaryLocked(p)
+}
 
-	// Remove from current position if exists
+// SetPrimaryQueued switches the primary provider safely with respect to in-flight
+// signals (#7).  If a signal is currently being processed the switch is deferred
+// until that signal completes.  Returns true if the switch was applied immediately,
+// false if it was queued.
+func (r *Router) SetPrimaryQueued(p Provider) (applied bool) {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+
+	if r.signalDepth.Load() == 0 {
+		r.mu.Lock()
+		r.applyPrimaryLocked(p)
+		r.mu.Unlock()
+		return true
+	}
+	// Queue for application in EndSignal.
+	r.pendingSwitch = p
+	log.Printf("llm/router: model switch to %s queued (signal in flight)", p.Name())
+	return false
+}
+
+// BeginSignal marks the start of signal processing.  Must be paired with EndSignal.
+func (r *Router) BeginSignal() {
+	r.signalDepth.Add(1)
+}
+
+// EndSignal marks the end of signal processing and applies any queued primary switch.
+func (r *Router) EndSignal() {
+	depth := r.signalDepth.Add(-1)
+	if depth < 0 {
+		// Bug guard — never go negative.
+		r.signalDepth.Store(0)
+		depth = 0
+	}
+	if depth != 0 {
+		// Other signals still in flight; leave pending switch for last one.
+		return
+	}
+	// Last signal completed — drain any pending switch.
+	r.pendingMu.Lock()
+	pending := r.pendingSwitch
+	r.pendingSwitch = nil
+	r.pendingMu.Unlock()
+
+	if pending != nil {
+		r.mu.Lock()
+		r.applyPrimaryLocked(pending)
+		r.mu.Unlock()
+		log.Printf("llm/router: queued model switch to %s applied", pending.Name())
+	}
+}
+
+// applyPrimaryLocked moves p to the front of providers. mu must be held.
+func (r *Router) applyPrimaryLocked(p Provider) {
 	for i, existing := range r.providers {
 		if existing.Name() == p.Name() {
 			r.providers = append(r.providers[:i], r.providers[i+1:]...)
 			break
 		}
 	}
-	// Prepend as primary
 	r.providers = append([]Provider{p}, r.providers...)
-	// Newly selected primary should start clean.
 	r.failures[p.Name()] = 0
 	delete(r.cooldowns, p.Name())
 }
