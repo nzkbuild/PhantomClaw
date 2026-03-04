@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"context"
 	"strings"
+
+	"github.com/nzkbuild/PhantomClaw/internal/llm"
 )
 
 // Intent represents the classified intent of a user chat message.
@@ -57,7 +60,8 @@ var tradingKeywords = []string{
 	"how much", "how many trades", "win rate", "performance",
 }
 
-// ClassifyIntent determines the intent of a user message.
+// ClassifyIntent determines the intent of a user message using keyword matching.
+// Returns (intent, cmdHint). cmdHint is non-empty only for IntentCommand.
 func ClassifyIntent(text string) (Intent, string) {
 	lower := strings.ToLower(strings.TrimSpace(text))
 
@@ -77,4 +81,41 @@ func ClassifyIntent(text string) (Intent, string) {
 
 	// Default: general knowledge / conversation
 	return IntentKnowledge, ""
+}
+
+// ClassifyIntentWithLLM uses the LLM as a fallback classifier when keyword
+// matching returns IntentKnowledge. This catches edge cases like
+// "how am I doing today" (should be trading) that keywords miss.
+//
+// The classifier runs a fast single-token classification prompt.
+// Falls back to IntentKnowledge on any error.
+func ClassifyIntentWithLLM(ctx context.Context, text string, chat func(ctx context.Context, msgs []llm.Message) (string, error)) Intent {
+	classifyPrompt := `Classify this user message into exactly one category.
+Reply with ONLY the category name, nothing else.
+
+Categories:
+- TRADING: questions about P&L, positions, trades, performance, market data
+- COMMAND: requests to change bot mode, settings, or run bot commands
+- KNOWLEDGE: general questions, explanations, learning, conversation
+
+Message: "` + text + `"
+
+Category:`
+
+	result, err := chat(ctx, []llm.Message{
+		{Role: "user", Content: classifyPrompt},
+	})
+	if err != nil {
+		return IntentKnowledge
+	}
+
+	result = strings.ToLower(strings.TrimSpace(result))
+	switch {
+	case strings.Contains(result, "trading"):
+		return IntentTrading
+	case strings.Contains(result, "command"):
+		return IntentCommand
+	default:
+		return IntentKnowledge
+	}
 }

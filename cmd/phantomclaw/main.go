@@ -446,8 +446,18 @@ func main() {
 		}
 	}
 
-	// --- Chat history (in-memory conversation memory for /chat mode) ---
-	chatHistory := memory.NewChatHistory(20)
+	// --- Chat history (persistent conversation memory for /chat mode) ---
+	chatHistory := memory.NewChatHistory(40)
+	if db != nil {
+		chatHistory.Bind(db.Conn())
+		if pruned, err := chatHistory.PruneOlderThanDays(7); err == nil && pruned > 0 {
+			logger.Infow("chat: pruned old conversations", "count", pruned)
+		}
+		logger.Info("chat: persistent memory bound to SQLite")
+		banner.Step("Chat Memory", logging.StatusOK, "persistent (SQLite)")
+	} else {
+		banner.Step("Chat Memory", logging.StatusWarn, "no database — chat memory disabled")
+	}
 
 	// --- Load soul.md identity ---
 	soulPrompt := ""

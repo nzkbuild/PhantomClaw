@@ -590,8 +590,18 @@ func (a *Agent) HandleTradeResult(ctx context.Context, req *bridge.TradeResultRe
 // HandleChat generates a conversational reply for Telegram chat mode.
 // Routes by intent: trading queries get DB context, commands get mapped, knowledge goes direct.
 func (a *Agent) HandleChat(ctx context.Context, userText string) (string, error) {
-	// Classify intent
+	// Classify intent (keywords first, LLM fallback)
 	intent, cmdHint := ClassifyIntent(userText)
+
+	// If keywords returned generic "knowledge", try LLM classification for edge cases
+	if intent == IntentKnowledge {
+		llmCtx, llmCancel := context.WithTimeout(ctx, 3*time.Second)
+		llmIntent := ClassifyIntentWithLLM(llmCtx, userText, a.llm.Chat)
+		llmCancel()
+		if llmIntent != IntentKnowledge {
+			intent = llmIntent
+		}
+	}
 
 	// If it's a natural language command, return the mapped command hint
 	if intent == IntentCommand && cmdHint != "" {
@@ -668,6 +678,75 @@ func (a *Agent) HandleChat(ctx context.Context, userText string) (string, error)
 		a.chatHistory.Append("assistant", reply)
 	}
 
+	return reply, nil
+}
+
+// HandleChatStream is the streaming variant of HandleChat.
+// The onChunk callback is called for each token chunk as it arrives from the LLM.
+// Returns the full assembled reply.
+func (a *Agent) HandleChatStream(ctx context.Context, userText string, onChunk func(string)) (string, error) {
+	// Same intent + routing as HandleChat
+	intent, cmdHint := ClassifyIntent(userText)
+	if intent == IntentCommand && cmdHint != "" {
+		msg := fmt.Sprintf("💡 It looks like you want `%s`. Try sending that command directly!", cmdHint)
+		onChunk(msg)
+		return msg, nil
+	}
+
+	// Build system prompt (same as HandleChat)
+	var sb strings.Builder
+	if a.soulPrompt != "" {
+		sb.WriteString(a.soulPrompt)
+		sb.WriteString("\n\n")
+	} else {
+		sb.WriteString("You are PhantomClaw, a trading assistant bot. ")
+		sb.WriteString("Answer clearly and concisely.\n")
+	}
+	sb.WriteString("## Current State\n")
+	sb.WriteString(fmt.Sprintf("Session: %s\n", a.scheduler.CurrentSession()))
+	sb.WriteString(fmt.Sprintf("Mode: %s\n", a.safety.CurrentMode()))
+	stats := a.risk.Stats()
+	sb.WriteString(fmt.Sprintf("Open positions: %d/%d\n", stats.OpenPositions, stats.MaxPositions))
+	sb.WriteString(fmt.Sprintf("Daily loss: $%.2f\n", stats.DailyLoss))
+
+	if intent == IntentTrading && a.memory != nil {
+		sb.WriteString("\n## Recent Trade Data\n")
+		if rows, err := a.memory.ListDecisionHistory(5, ""); err == nil && len(rows) > 0 {
+			for _, row := range rows {
+				sb.WriteString(fmt.Sprintf("- %s: %s — %s\n", row.Symbol, row.Decision, row.Reason))
+			}
+		}
+		if summary, err := a.memory.GetTradeSummary(7); err == nil {
+			sb.WriteString(fmt.Sprintf("7-day: %d trades, %.0f%% win, $%.2f P&L\n",
+				summary.TotalTrades, summary.WinRate*100, summary.TotalPnL))
+		}
+	}
+
+	messages := []llm.Message{{Role: "system", Content: sb.String()}}
+	if a.chatHistory != nil {
+		for _, turn := range a.chatHistory.Recent(maxChatTurns) {
+			messages = append(messages, llm.Message{Role: turn.Role, Content: turn.Content})
+		}
+	}
+	messages = append(messages, llm.Message{Role: "user", Content: userText})
+
+	// Stream from LLM
+	var full strings.Builder
+	err := a.llm.StreamChat(ctx, messages, func(chunk string) {
+		full.WriteString(chunk)
+		if onChunk != nil {
+			onChunk(chunk)
+		}
+	})
+	if err != nil {
+		return "", err
+	}
+
+	reply := full.String()
+	if a.chatHistory != nil {
+		a.chatHistory.Append("user", userText)
+		a.chatHistory.Append("assistant", reply)
+	}
 	return reply, nil
 }
 

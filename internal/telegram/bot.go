@@ -44,6 +44,12 @@ type ChatResponder interface {
 	HandleChat(ctx context.Context, userText string) (string, error)
 }
 
+// StreamChatResponder extends ChatResponder with streaming support.
+type StreamChatResponder interface {
+	ChatResponder
+	HandleChatStream(ctx context.Context, userText string, onChunk func(string)) (string, error)
+}
+
 // BridgeProbeResult summarizes bridge + EA connectivity diagnostics.
 type BridgeProbeResult struct {
 	Service       string
@@ -759,7 +765,7 @@ func (tb *Bot) handleUnknown(ctx context.Context, b *bot.Bot, update *models.Upd
 	}
 
 	if tb.isChatModeEnabled() && tb.deps.Chat != nil && !strings.HasPrefix(strings.TrimSpace(update.Message.Text), "/") {
-		chatCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		chatCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
 		// Send typing indicator so user knows bot is thinking
@@ -768,6 +774,13 @@ func (tb *Bot) handleUnknown(ctx context.Context, b *bot.Bot, update *models.Upd
 			Action: "typing",
 		})
 
+		// Try streaming if available
+		if streamer, ok := tb.deps.Chat.(StreamChatResponder); ok {
+			tb.handleStreamingChat(chatCtx, b, update, streamer)
+			return
+		}
+
+		// Fallback to blocking chat
 		reply, err := tb.deps.Chat.HandleChat(chatCtx, update.Message.Text)
 		if err != nil {
 			tb.sendReply(ctx, b, update.Message.Chat.ID, fmt.Sprintf("❌ Chat error: %v", err), false)

@@ -101,6 +101,11 @@ func (db *DB) Close() error {
 	return db.conn.Close()
 }
 
+// Conn returns the underlying *sql.DB for direct access (e.g., ChatHistory binding).
+func (db *DB) Conn() *sql.DB {
+	return db.conn
+}
+
 // QueryRow exposes a single-row SQL query for flexible lookups.
 func (db *DB) QueryRow(query string, args ...any) *sql.Row {
 	return db.conn.QueryRow(query, args...)

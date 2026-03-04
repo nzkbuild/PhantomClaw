@@ -1,76 +1,126 @@
 package memory
 
 import (
-	"sync"
+	"database/sql"
+	"fmt"
 	"time"
 )
 
-// ChatTurn represents a single message in a chat conversation (not a trading signal).
+// ChatTurn represents a single message in a chat conversation.
 type ChatTurn struct {
 	Timestamp time.Time `json:"ts"`
 	Role      string    `json:"role"`    // "user" | "assistant"
 	Content   string    `json:"content"` // The message text
 }
 
-// ChatHistory maintains a bounded in-memory history of chat conversation turns.
-// This gives the Telegram chat mode memory across messages within the same session.
+// ChatHistory persists chat conversation turns in SQLite.
+// Survives restarts and auto-prunes to stay within a configurable limit.
 type ChatHistory struct {
-	mu       sync.Mutex
-	turns    []ChatTurn
+	db       *sql.DB
 	maxTurns int
 }
 
-// NewChatHistory creates a chat history buffer with the given max turn limit.
+// NewChatHistory creates a persistent chat history backed by the conversations table.
+// maxTurns controls how many turns are kept (oldest auto-pruned).
 func NewChatHistory(maxTurns int) *ChatHistory {
 	if maxTurns <= 0 {
-		maxTurns = 20
+		maxTurns = 40
 	}
-	return &ChatHistory{
-		turns:    make([]ChatTurn, 0, maxTurns),
-		maxTurns: maxTurns,
-	}
+	return &ChatHistory{maxTurns: maxTurns}
 }
 
-// Append adds a turn to the chat history, evicting the oldest if at capacity.
+// Bind connects the chat history to a database connection.
+// Must be called before Append/Recent. Safe to call with nil (becomes no-op).
+func (ch *ChatHistory) Bind(db *sql.DB) {
+	ch.db = db
+}
+
+// Append stores a turn in the conversations table and prunes old entries.
 func (ch *ChatHistory) Append(role, content string) {
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
-
-	ch.turns = append(ch.turns, ChatTurn{
-		Timestamp: time.Now(),
-		Role:      role,
-		Content:   content,
-	})
-
-	// Evict oldest if over capacity
-	if len(ch.turns) > ch.maxTurns {
-		ch.turns = ch.turns[len(ch.turns)-ch.maxTurns:]
+	if ch.db == nil {
+		return
 	}
+
+	_, err := ch.db.Exec(
+		`INSERT INTO conversations (role, content) VALUES (?, ?)`,
+		role, content,
+	)
+	if err != nil {
+		return // silent fail — chat memory is non-critical
+	}
+
+	// Prune old turns beyond maxTurns
+	ch.db.Exec(`
+		DELETE FROM conversations WHERE id NOT IN (
+			SELECT id FROM conversations ORDER BY id DESC LIMIT ?
+		)`, ch.maxTurns)
 }
 
-// Recent returns the last N chat turns (or all if fewer exist).
+// Recent returns the last N chat turns from the database.
 func (ch *ChatHistory) Recent(n int) []ChatTurn {
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
-
-	if n <= 0 || n > len(ch.turns) {
-		n = len(ch.turns)
+	if ch.db == nil {
+		return nil
 	}
-	result := make([]ChatTurn, n)
-	copy(result, ch.turns[len(ch.turns)-n:])
-	return result
+	if n <= 0 {
+		n = ch.maxTurns
+	}
+
+	rows, err := ch.db.Query(`
+		SELECT role, content, created_at FROM conversations
+		ORDER BY id DESC LIMIT ?`, n)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var turns []ChatTurn
+	for rows.Next() {
+		var t ChatTurn
+		if err := rows.Scan(&t.Role, &t.Content, &t.Timestamp); err != nil {
+			continue
+		}
+		turns = append(turns, t)
+	}
+
+	// Reverse so oldest is first (SQL returns newest first)
+	for i, j := 0, len(turns)-1; i < j; i, j = i+1, j-1 {
+		turns[i], turns[j] = turns[j], turns[i]
+	}
+	return turns
 }
 
-// Clear resets the chat history.
+// Clear removes all chat history.
 func (ch *ChatHistory) Clear() {
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
-	ch.turns = ch.turns[:0]
+	if ch.db == nil {
+		return
+	}
+	ch.db.Exec("DELETE FROM conversations")
 }
 
 // Len returns the current number of stored turns.
 func (ch *ChatHistory) Len() int {
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
-	return len(ch.turns)
+	if ch.db == nil {
+		return 0
+	}
+	var count int
+	err := ch.db.QueryRow("SELECT COUNT(*) FROM conversations").Scan(&count)
+	if err != nil {
+		return 0
+	}
+	return count
+}
+
+// PruneOlderThanDays removes chat turns older than N days.
+func (ch *ChatHistory) PruneOlderThanDays(days int) (int, error) {
+	if ch.db == nil || days <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().AddDate(0, 0, -days)
+	result, err := ch.db.Exec(
+		`DELETE FROM conversations WHERE created_at < ?`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("chat: prune: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	return int(affected), nil
 }
