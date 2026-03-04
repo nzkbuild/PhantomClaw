@@ -926,14 +926,29 @@ func main() {
 
 	// --- Session alerts ---
 	var sessionAlerts *alerts.SessionAlerts
+	var opsAlerts *alerts.OpsAlerts
 	if tgBot != nil {
+		telegramAlert := makeSessionAlertSender(tgBot, logger)
 		sessionAlerts = alerts.NewSessionAlerts(
-			makeSessionAlertSender(tgBot, logger),
+			telegramAlert,
 			cfg.Bot.Timezone,
 		)
 		sessionAlerts.Start()
 		defer sessionAlerts.Stop()
 		logger.Info("alerts: session alerts started")
+
+		opsAlerts = alerts.NewOpsAlerts(alerts.OpsAlertsConfig{
+			PollInterval:   10 * time.Second,
+			ProbeTimeout:   1500 * time.Millisecond,
+			DegradeFor:     20 * time.Second,
+			RepeatEvery:    15 * time.Minute,
+			UpdateCooldown: 2 * time.Minute,
+			Probe:          opsProbe,
+			Send:           telegramAlert,
+		})
+		opsAlerts.Start()
+		defer opsAlerts.Stop()
+		logger.Info("alerts: ops alerts started")
 	}
 
 	// --- Config hot reload ---
