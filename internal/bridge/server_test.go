@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -666,6 +667,85 @@ func TestBridgeOpsHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestBridgeOpsHealthReasonCodeAuthUnauthorized(t *testing.T) {
+	SetVersion("9.9.9-test")
+	SetContractVersion("v3")
+	s := NewServer("127.0.0.1", 0, nil, nil, nil, "bridge-secret")
+
+	sendSignal(t, s, "bridge-secret", "v3", "req-auth-ops")
+
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/decision?symbol=EURUSD", nil)
+		s.handleDecision(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthorized status=%d, want=%d", rec.Code, http.StatusUnauthorized)
+		}
+	}
+
+	payload := getOpsPayload(t, s, "bridge-secret", "v3")
+	if got := payload["bridge_auth_status"]; got != "RED" {
+		t.Fatalf("bridge_auth_status=%v, want=RED", got)
+	}
+	if got := payload["overall_reason_code"]; got != "AUTH_UNAUTHORIZED" {
+		t.Fatalf("overall_reason_code=%v, want=AUTH_UNAUTHORIZED", got)
+	}
+}
+
+func TestBridgeOpsHealthReasonCodeContractMismatch(t *testing.T) {
+	SetVersion("9.9.9-test")
+	SetContractVersion("v3")
+	s := NewServer("127.0.0.1", 0, nil, nil, nil, "")
+
+	sendSignal(t, s, "", "v3", "req-contract-ops")
+
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/decision?symbol=EURUSD", nil)
+		req.Header.Set(contractVersionHeader, "v2")
+		s.handleDecision(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("contract mismatch status=%d, want=%d", rec.Code, http.StatusBadRequest)
+		}
+	}
+
+	payload := getOpsPayload(t, s, "", "v3")
+	if got := payload["contract_compat_status"]; got != "RED" {
+		t.Fatalf("contract_compat_status=%v, want=RED", got)
+	}
+	if got := payload["overall_reason_code"]; got != "CONTRACT_MISMATCH" {
+		t.Fatalf("overall_reason_code=%v, want=CONTRACT_MISMATCH", got)
+	}
+}
+
+func TestBridgeOpsHealthReasonCodeQueueStuck(t *testing.T) {
+	SetVersion("9.9.9-test")
+	SetContractVersion("v3")
+	s := NewServer("127.0.0.1", 0, nil, nil, nil, "")
+
+	sendSignal(t, s, "", "v3", "req-queue-ops")
+
+	s.mu.Lock()
+	for i := 0; i < 101; i++ {
+		reqID := "q-" + strconv.Itoa(i)
+		decision := SignalResponse{
+			RequestID: reqID,
+			Action:    "PLACE_PENDING",
+			Symbol:    "EURUSD",
+		}
+		s.pendingByRequest[reqID] = decision
+	}
+	s.mu.Unlock()
+
+	payload := getOpsPayload(t, s, "", "v3")
+	if got := payload["decision_loop_status"]; got != "RED" {
+		t.Fatalf("decision_loop_status=%v, want=RED", got)
+	}
+	if got := payload["overall_reason_code"]; got != "QUEUE_STUCK" {
+		t.Fatalf("overall_reason_code=%v, want=QUEUE_STUCK", got)
+	}
+}
+
 func TestBridgeRejectsIncompatibleContractVersion(t *testing.T) {
 	SetContractVersion("v3")
 	s := NewServer("127.0.0.1", 0, nil, nil, nil, "")
@@ -740,6 +820,52 @@ func waitForDecision(t *testing.T, s *Server, requestID, symbol string) (SignalR
 		time.Sleep(10 * time.Millisecond)
 	}
 	return SignalResponse{}, false
+}
+
+func sendSignal(t *testing.T, s *Server, authToken, contract, requestID string) {
+	t.Helper()
+	payload := `{
+		"request_id":"` + requestID + `",
+		"symbol":"EURUSD",
+		"timeframe":"M5",
+		"bid":1.10000,
+		"ask":1.10020,
+		"spread":2.0,
+		"timestamp":"2026-03-04 10:00:00"
+	}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/signal", strings.NewReader(payload))
+	if strings.TrimSpace(authToken) != "" {
+		req.Header.Set(bridgeAuthHeader, authToken)
+	}
+	if strings.TrimSpace(contract) != "" {
+		req.Header.Set(contractVersionHeader, contract)
+	}
+	s.handleSignal(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("signal status=%d, want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func getOpsPayload(t *testing.T, s *Server, authToken, contract string) map[string]any {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health/ops", nil)
+	if strings.TrimSpace(authToken) != "" {
+		req.Header.Set(bridgeAuthHeader, authToken)
+	}
+	if strings.TrimSpace(contract) != "" {
+		req.Header.Set(contractVersionHeader, contract)
+	}
+	s.handleOpsHealth(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ops health status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode ops payload: %v", err)
+	}
+	return payload
 }
 
 func getDecision(t *testing.T, s *Server, requestID, symbol string) SignalResponse {
