@@ -258,17 +258,21 @@ func (tb *Bot) handleStatus(ctx context.Context, b *bot.Bot, update *models.Upda
 			lastSignalAge := asInt64(eaMetrics["last_signal_age_sec"], -1)
 			queueDepth := asInt64(decisionMetrics["queue_depth_active"], -1)
 			authFailures := asInt64(authMetrics["auth_failures_5m"], -1)
+			actionHint := opsActionHint(reasonCode, overallStatus)
 
 			opsBlock = fmt.Sprintf("\n\n*Ops*\n"+
 				"Overall: %s (%s)\n"+
 				"EA signal age: %s\n"+
 				"Queue depth: %s\n"+
-				"Auth failures (5m): %s",
+				"Auth failures (5m): %s\n"+
+				"Action: %s\n"+
+				"Runbook: v4.2_runbook.md",
 				overallStatus,
 				reasonCode,
 				fmtAge(lastSignalAge),
 				fmtMetric(queueDepth),
 				fmtMetric(authFailures),
+				actionHint,
 			)
 		}
 	}
@@ -808,4 +812,34 @@ func fmtMetric(v int64) string {
 		return "n/a"
 	}
 	return fmt.Sprintf("%d", v)
+}
+
+func opsActionHint(reasonCode, overallStatus string) string {
+	rc := strings.ToUpper(strings.TrimSpace(reasonCode))
+	st := strings.ToUpper(strings.TrimSpace(overallStatus))
+
+	switch rc {
+	case "OPS_HEALTHY":
+		return "No action."
+	case "AUTH_UNAUTHORIZED", "AUTH_INTERMITTENT_FAILURE":
+		return "Verify bridge token; switch OBSERVE if persistent."
+	case "CONTRACT_MISMATCH", "CONTRACT_INTERMITTENT_MISMATCH":
+		return "Align BridgeContractVersion with bridge major version."
+	case "EA_NO_SIGNALS_YET", "EA_STALE_SIGNAL", "EA_SIGNAL_LAGGING":
+		return "Check EA attached/chart + WebRequest + network."
+	case "QUEUE_STUCK", "DECISION_LOOP_DEGRADED":
+		return "Check queue/provider latency; use OBSERVE until stable."
+	case "AI_NO_DECISIONS_YET", "AI_DECISION_STALE":
+		return "Check model/provider health and API key."
+	case "DATA_STALE", "DATA_AGING":
+		return "Validate signal freshness and dashboard sync."
+	}
+
+	if st == "RED" {
+		return "Switch OBSERVE now; HALT if cause is unclear."
+	}
+	if st == "AMBER" {
+		return "Monitor closely; OBSERVE if not recovering."
+	}
+	return "No action."
 }

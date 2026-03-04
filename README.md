@@ -19,6 +19,7 @@ PhantomClaw is an autonomous trading bot that connects to **MetaTrader 5** and u
 - [How It Works](#-how-it-works)
 - [Trading Sessions](#-trading-sessions)
 - [Safety Features](#-safety-features)
+- [Ops Runbook](#-ops-runbook)
 - [Configuration](#-configuration)
 - [File Structure](#-file-structure)
 - [Troubleshooting](#-troubleshooting)
@@ -223,7 +224,7 @@ Only the configured `telegram.chat_id` is authorized to control the bot.
 
 | Command | What It Does |
 |---------|-------------|
-| `/status` | Shows current mode, open positions, daily P&L, and session |
+| `/status` | Shows mode/session/risk + Ops health reason code + recommended action |
 | `/halt` | 🛑 **Emergency stop** — freezes all trading immediately |
 | `/mode auto` | Resume autonomous trading |
 | `/mode observe` | Bot watches the market but doesn't trade |
@@ -348,6 +349,20 @@ PhantomClaw has multiple layers of protection — **the AI cannot override these
 
 ---
 
+## 📒 Ops Runbook
+
+Use [v4.2_runbook.md](./v4.2_runbook.md) for reason-code-to-action incident handling.
+
+The runbook maps `/health/ops` reason codes (like `AUTH_UNAUTHORIZED`, `CONTRACT_MISMATCH`, `QUEUE_STUCK`) to:
+
+1. immediate checks,
+2. mode decision (`AUTO` vs `OBSERVE` vs `HALT`),
+3. recovery criteria before resuming.
+
+Telegram `/status` includes an `Action:` line sourced from the same reason-code logic.
+
+---
+
 ## 🔧 Configuration
 
 Use `config.example.yaml` as the tracked template and keep your real `config.yaml` local (ignored by git).  
@@ -374,6 +389,7 @@ PhantomClaw/
 ├── VERSION                  ← Current version (4.1.0)
 ├── v4.1_blueprint.md        ← Hardening roadmap
 ├── v4.2_blueprint.md        ← Observability & operational-truth roadmap
+├── v4.2_runbook.md          ← Reason-code incident response runbook
 ├── scripts/
 │   └── phantomclaw.ps1      ← Build/run/test menu script
 ├── ea/
