@@ -36,6 +36,7 @@ type Dependencies struct {
 	LLMSwitch   func(target string) (string, error)
 	LLMStatus   func() map[string]string
 	LLMSticky   bool
+	LLMUsage    func() string // formatted daily usage report
 }
 
 // ChatResponder handles free-form chat messages when chat mode is enabled.
@@ -111,6 +112,7 @@ func New(token string, chatID int64, deps Dependencies) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/chat", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleChatMode))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/handshake", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleHandshake))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/diag", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleDiag))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/usage", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleUsage))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypePrefix, tb.wrapAuthorized(tb.handleHelp))
 
 	tb.b = b
@@ -617,6 +619,7 @@ func (tb *Bot) handleHelp(ctx context.Context, b *bot.Bot, update *models.Update
 		"`/halt` — Emergency stop\n" +
 		"`/provider [status|name]` — Show or switch LLM provider\n" +
 		"`/model [status|list|set <provider[:model]>]` — Runtime model/provider target control\n" +
+		"`/usage` — Daily LLM token usage per provider\n" +
 		"`/report` — Daily summary + diary\n" +
 		"`/pairs` — Active pairs + bias\n" +
 		"`/pending` — Pending orders (check MT5)\n" +
@@ -702,6 +705,15 @@ func (tb *Bot) handleDiag(ctx context.Context, b *bot.Bot, update *models.Update
 	tb.sendReply(ctx, b, update.Message.Chat.ID, sb.String(), false)
 }
 
+func (tb *Bot) handleUsage(ctx context.Context, b *bot.Bot, update *models.Update) {
+	logInbound("/usage", update)
+	if tb.deps.LLMUsage == nil {
+		tb.sendReply(ctx, b, update.Message.Chat.ID, "📊 Usage tracking not available.", false)
+		return
+	}
+	tb.sendReply(ctx, b, update.Message.Chat.ID, tb.deps.LLMUsage(), false)
+}
+
 func (tb *Bot) handleChatMode(ctx context.Context, b *bot.Bot, update *models.Update) {
 	logInbound("/chat", update)
 	parts := strings.Fields(update.Message.Text)
@@ -749,6 +761,12 @@ func (tb *Bot) handleUnknown(ctx context.Context, b *bot.Bot, update *models.Upd
 	if tb.isChatModeEnabled() && tb.deps.Chat != nil && !strings.HasPrefix(strings.TrimSpace(update.Message.Text), "/") {
 		chatCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
+
+		// Send typing indicator so user knows bot is thinking
+		b.SendChatAction(ctx, &bot.SendChatActionParams{
+			ChatID: update.Message.Chat.ID,
+			Action: "typing",
+		})
 
 		reply, err := tb.deps.Chat.HandleChat(chatCtx, update.Message.Text)
 		if err != nil {

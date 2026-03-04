@@ -47,7 +47,7 @@ func TestBuildToolDefsForProviderRespectsPolicy(t *testing.T) {
 		LLM:    &staticProvider{name: "router:groq"},
 		Skills: reg,
 		ToolPolicy: map[string][]string{
-			"groq": []string{"alpha"},
+			"groq": {"alpha"},
 		},
 	})
 

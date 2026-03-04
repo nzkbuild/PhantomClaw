@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -115,6 +116,42 @@ func (s *SessionStore) now() time.Time {
 		return time.Now().In(s.location)
 	}
 	return s.nowFn().In(s.location)
+}
+
+// PruneOlderThan removes session JSONL files older than the given number of days.
+// Call on startup or via cron to prevent unbounded disk growth.
+func (s *SessionStore) PruneOlderThan(days int) (int, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cutoff := s.now().AddDate(0, 0, -days)
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return 0, fmt.Errorf("session: prune read dir: %w", err)
+	}
+
+	pruned := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		// Parse date from filename: 2006-01-02.jsonl
+		name := strings.TrimSuffix(entry.Name(), ".jsonl")
+		fileDate, err := time.Parse("2006-01-02", name)
+		if err != nil {
+			continue // skip non-date files
+		}
+		if fileDate.Before(cutoff) {
+			path := filepath.Join(s.dir, entry.Name())
+			if err := os.Remove(path); err == nil {
+				pruned++
+			}
+		}
+	}
+	return pruned, nil
 }
 
 func (s *SessionStore) readFile(path string, maxTurns int, pairFilter string) ([]Turn, error) {

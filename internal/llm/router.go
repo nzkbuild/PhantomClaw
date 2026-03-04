@@ -25,11 +25,11 @@ type Router struct {
 	stickyPrimary  bool          // when true, only primary provider is used
 
 	// Signal-in-flight guard (issue #7).
-	// signalMu guards signalDepth and pendingSwitch so switch/apply decisions
-	// are atomic with respect to BeginSignal/EndSignal.
 	signalMu      sync.Mutex
 	signalDepth   int
 	pendingSwitch Provider // nil when no switch is queued
+
+	usage *UsageTracker // optional: tracks token usage per provider
 }
 
 // RouterConfig holds configuration for the smart router.
@@ -111,11 +111,19 @@ func (r *Router) Chat(ctx context.Context, messages []Message) (string, error) {
 			continue
 		}
 
+		start := time.Now()
 		attemptCtx, cancel := r.contextForAttempt(ctx, len(providers)-i)
 		result, err := p.Chat(attemptCtx, messages)
 		cancel()
 		if err == nil {
 			r.recordSuccess(p.Name())
+			if r.usage != nil {
+				inputChars := 0
+				for _, m := range messages {
+					inputChars += len(m.Content)
+				}
+				r.usage.Record(p.Name(), inputChars, len(result), time.Since(start))
+			}
 			return result, nil
 		}
 
@@ -179,11 +187,23 @@ func (r *Router) ToolCall(ctx context.Context, messages []Message, tools []Tool)
 			continue
 		}
 
+		start := time.Now()
 		attemptCtx, cancel := r.contextForAttempt(ctx, len(providers)-i)
 		result, err := p.ToolCall(attemptCtx, messages, tools)
 		cancel()
 		if err == nil {
 			r.recordSuccess(p.Name())
+			if r.usage != nil {
+				inputChars := 0
+				for _, m := range messages {
+					inputChars += len(m.Content)
+				}
+				outChars := 0
+				if result != nil {
+					outChars = len(result.Decision)
+				}
+				r.usage.Record(p.Name(), inputChars, outChars, time.Since(start))
+			}
 			return result, nil
 		}
 
@@ -309,6 +329,20 @@ func (r *Router) SetStickyPrimary(enabled bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.stickyPrimary = enabled
+}
+
+// SetUsageTracker attaches an optional usage tracker for token/latency metrics.
+func (r *Router) SetUsageTracker(tracker *UsageTracker) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.usage = tracker
+}
+
+// Usage returns the attached usage tracker (may be nil).
+func (r *Router) Usage() *UsageTracker {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.usage
 }
 
 // SetAliases replaces alias mapping at runtime.

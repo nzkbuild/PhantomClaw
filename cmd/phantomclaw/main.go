@@ -135,10 +135,6 @@ func makeBridgeProbeWithToken(baseURL string, authTokenFn func() string) telegra
 	}
 }
 
-func makeRuntimeDiag(baseURL, authToken string, providerCount int, db *memory.DB) telegram.RuntimeDiagFunc {
-	return makeRuntimeDiagWithToken(baseURL, func() string { return authToken }, providerCount, db)
-}
-
 func makeRuntimeDiagWithToken(baseURL string, authTokenFn func() string, providerCount int, db *memory.DB) telegram.RuntimeDiagFunc {
 	probe := makeBridgeProbeWithToken(baseURL, authTokenFn)
 	return func(ctx context.Context) (string, error) {
@@ -165,10 +161,6 @@ func makeRuntimeDiagWithToken(baseURL string, authTokenFn func() string, provide
 		}
 		return sb.String(), nil
 	}
-}
-
-func makeBridgeOpsProbe(baseURL, authToken string) func(ctx context.Context) (map[string]any, error) {
-	return makeBridgeOpsProbeWithToken(baseURL, func() string { return authToken })
 }
 
 func makeBridgeOpsProbeWithToken(baseURL string, authTokenFn func() string) func(ctx context.Context) (map[string]any, error) {
@@ -372,6 +364,10 @@ func main() {
 		} else {
 			banner.Step("Providers", logging.StatusOK, ordered[0].Name()+" (primary)")
 		}
+
+		// Attach usage tracker for token/latency metrics
+		usageTracker := llm.NewUsageTracker()
+		llmRouter.SetUsageTracker(usageTracker)
 	} else {
 		logger.Warn("llm: NO providers configured — agent brain disabled")
 		banner.Step("Providers", logging.StatusFail, "none configured — agent brain disabled")
@@ -442,6 +438,26 @@ func main() {
 		logger.Warnw("sessions: failed to create store", "error", err)
 	} else {
 		logger.Infow("sessions: store ready", "dir", sessionsDir)
+		// Prune old session files (keep 30 days)
+		if pruned, err := sessionStore.PruneOlderThan(30); err != nil {
+			logger.Warnw("sessions: prune failed", "error", err)
+		} else if pruned > 0 {
+			logger.Infow("sessions: pruned old files", "count", pruned)
+		}
+	}
+
+	// --- Chat history (in-memory conversation memory for /chat mode) ---
+	chatHistory := memory.NewChatHistory(20)
+
+	// --- Load soul.md identity ---
+	soulPrompt := ""
+	if data, err := os.ReadFile("soul.md"); err == nil {
+		soulPrompt = strings.TrimSpace(string(data))
+		logger.Infow("identity: soul.md loaded", "chars", len(soulPrompt))
+		banner.Step("Identity", logging.StatusOK, "soul.md loaded")
+	} else {
+		logger.Info("identity: soul.md not found, using default identity")
+		banner.Step("Identity", logging.StatusWarn, "soul.md not found (using default)")
 	}
 
 	// --- Heartbeat ---
@@ -475,6 +491,8 @@ func main() {
 			Scheduler:   sched,
 			Pairs:       cfg.Pairs,
 			Sessions:    sessionStore,
+			ChatHistory: chatHistory,
+			SoulPrompt:  soulPrompt,
 			Correlation: corrGuard,
 			Spread:      spreadFilter,
 			News:        newsFetcher,
@@ -485,7 +503,7 @@ func main() {
 			Diary:       diaryWriter,
 			ToolPolicy:  toolPolicy,
 		})
-		logger.Info("agent: brain initialized with full integrations + conversation memory")
+		logger.Info("agent: brain initialized with identity, chat memory, and full integrations")
 	}
 
 	// --- MT5 REST bridge ---
@@ -694,6 +712,14 @@ func main() {
 			LLMSwitch:   llmSwitch,
 			LLMStatus:   llmStatus,
 			LLMSticky:   stickyPrimary.Load(),
+			LLMUsage: func() string {
+				if llmRouter != nil {
+					if u := llmRouter.Usage(); u != nil {
+						return u.FormatUsage()
+					}
+				}
+				return "📊 Usage tracking not available."
+			},
 		})
 		if err != nil {
 			logger.Fatalf("telegram: %v", err)

@@ -19,21 +19,24 @@ import (
 )
 
 const (
-	maxContextTokens  = 2000 // PRD §13.7 — cap on injected context
-	maxToolRounds     = 5    // Max ReAct iterations before forcing a decision
-	maxIdenticalCalls = 2    // Break if same tool+args called this many times
+	maxContextChars   = 24000 // ~6000 tokens — cap on injected context (enforced via truncation)
+	maxToolRounds     = 5     // Max ReAct iterations before forcing a decision
+	maxIdenticalCalls = 2     // Break if same tool+args called this many times
+	maxChatTurns      = 10    // Max chat turns to inject into HandleChat prompt
 )
 
 // Agent is the core intelligence — the ReAct brain that drives PhantomClaw.
 type Agent struct {
-	llm       llm.Provider
-	skills    *skills.Registry
-	memory    *memory.DB
-	risk      *risk.Engine
-	safety    *safety.Manager
-	scheduler *scheduler.Scheduler
-	pairs     []string
-	sessions  *memory.SessionStore
+	llm         llm.Provider
+	skills      *skills.Registry
+	memory      *memory.DB
+	risk        *risk.Engine
+	safety      *safety.Manager
+	scheduler   *scheduler.Scheduler
+	pairs       []string
+	sessions    *memory.SessionStore
+	chatHistory *memory.ChatHistory
+	soulPrompt  string // loaded from soul.md at startup
 
 	// Phase 3 integrations
 	correlation *skills.CorrelationGuard
@@ -57,6 +60,8 @@ type Deps struct {
 	Scheduler   *scheduler.Scheduler
 	Pairs       []string
 	Sessions    *memory.SessionStore
+	ChatHistory *memory.ChatHistory
+	SoulPrompt  string // Identity loaded from soul.md
 	Correlation *skills.CorrelationGuard
 	Spread      *skills.SpreadFilter
 	News        *market.NewsFetcher
@@ -100,6 +105,8 @@ func New(d Deps) *Agent {
 		scheduler:   d.Scheduler,
 		pairs:       d.Pairs,
 		sessions:    d.Sessions,
+		chatHistory: d.ChatHistory,
+		soulPrompt:  d.SoulPrompt,
 		correlation: d.Correlation,
 		spread:      d.Spread,
 		news:        d.News,
@@ -235,9 +242,14 @@ type promptContext struct {
 func (a *Agent) buildPrompt(req *bridge.SignalRequest) promptContext {
 	var sb strings.Builder
 
-	// 1. System identity
-	sb.WriteString("You are PhantomClaw, an autonomous forex/gold trading agent.\n")
-	sb.WriteString("You analyze market data and decide whether to place pending orders.\n")
+	// 1. System identity (from soul.md if available, else fallback)
+	if a.soulPrompt != "" {
+		sb.WriteString(a.soulPrompt)
+		sb.WriteString("\n\n")
+	} else {
+		sb.WriteString("You are PhantomClaw, an autonomous forex/gold trading agent.\n")
+		sb.WriteString("You analyze market data and decide whether to place pending orders.\n")
+	}
 	sb.WriteString("You MUST respond with a JSON decision.\n\n")
 
 	// 2. Tool documentation (human-readable)
@@ -352,10 +364,16 @@ func (a *Agent) buildPrompt(req *bridge.SignalRequest) promptContext {
 	sb.WriteString(`{"action":"HOLD","reason":"why you are not trading"}`)
 	sb.WriteString("\n\nUse tools to gather more data before deciding. Always check confidence score.\n")
 
+	// Enforce context size limit via truncation
+	systemPrompt := sb.String()
+	if len(systemPrompt) > maxContextChars {
+		systemPrompt = systemPrompt[:maxContextChars] + "\n... [context truncated]\n"
+	}
+
 	signalJSON, _ := json.Marshal(req)
 
 	return promptContext{
-		systemPrompt: sb.String(),
+		systemPrompt: systemPrompt,
 		userMessage:  fmt.Sprintf("New signal received:\n```json\n%s\n```\nAnalyze this and decide: place a pending order or HOLD?", string(signalJSON)),
 	}
 }
@@ -570,21 +588,87 @@ func (a *Agent) HandleTradeResult(ctx context.Context, req *bridge.TradeResultRe
 }
 
 // HandleChat generates a conversational reply for Telegram chat mode.
+// Routes by intent: trading queries get DB context, commands get mapped, knowledge goes direct.
 func (a *Agent) HandleChat(ctx context.Context, userText string) (string, error) {
-	var sb strings.Builder
-	sb.WriteString("You are PhantomClaw, a trading assistant bot. ")
-	sb.WriteString("Answer clearly and concisely. Do not claim trades were executed unless explicitly provided.\n")
-	sb.WriteString(fmt.Sprintf("Current session: %s\n", a.scheduler.CurrentSession()))
-	sb.WriteString(fmt.Sprintf("Safety mode: %s\n", a.safety.CurrentMode()))
+	// Classify intent
+	intent, cmdHint := ClassifyIntent(userText)
 
+	// If it's a natural language command, return the mapped command hint
+	if intent == IntentCommand && cmdHint != "" {
+		return fmt.Sprintf("💡 It looks like you want `%s`. Try sending that command directly!", cmdHint), nil
+	}
+
+	var sb strings.Builder
+
+	// 1. Identity from soul.md
+	if a.soulPrompt != "" {
+		sb.WriteString(a.soulPrompt)
+		sb.WriteString("\n\n")
+	} else {
+		sb.WriteString("You are PhantomClaw, a trading assistant bot. ")
+		sb.WriteString("Answer clearly and concisely. Do not claim trades were executed unless explicitly provided.\n")
+	}
+
+	// 2. Runtime state context
+	sb.WriteString("## Current State\n")
+	sb.WriteString(fmt.Sprintf("Session: %s\n", a.scheduler.CurrentSession()))
+	sb.WriteString(fmt.Sprintf("Mode: %s\n", a.safety.CurrentMode()))
 	stats := a.risk.Stats()
 	sb.WriteString(fmt.Sprintf("Open positions: %d/%d\n", stats.OpenPositions, stats.MaxPositions))
-	sb.WriteString(fmt.Sprintf("Daily loss: %.2f\n", stats.DailyLoss))
+	sb.WriteString(fmt.Sprintf("Daily loss: $%.2f\n", stats.DailyLoss))
+	sb.WriteString(fmt.Sprintf("Weekend: %v\n", a.scheduler.IsWeekend()))
 
-	return a.llm.Chat(ctx, []llm.Message{
+	// 3. Trading-specific context injection
+	if intent == IntentTrading && a.memory != nil {
+		sb.WriteString("\n## Recent Trade Data\n")
+
+		// Inject recent closed trades
+		if rows, err := a.memory.ListDecisionHistory(5, ""); err == nil && len(rows) > 0 {
+			sb.WriteString("Recent decisions:\n")
+			for _, row := range rows {
+				sb.WriteString(fmt.Sprintf("- %s: %s — %s\n",
+					row.Symbol, row.Decision, row.Reason))
+			}
+		}
+
+		// Inject performance summary if available
+		if summary, err := a.memory.GetTradeSummary(7); err == nil {
+			sb.WriteString(fmt.Sprintf("\n7-day performance: %d trades, win rate %.0f%%, total P&L $%.2f\n",
+				summary.TotalTrades, summary.WinRate*100, summary.TotalPnL))
+		}
+	}
+
+	// 4. Build messages with conversation history
+	messages := []llm.Message{
 		{Role: "system", Content: sb.String()},
-		{Role: "user", Content: userText},
-	})
+	}
+
+	// Inject recent chat history for multi-turn memory
+	if a.chatHistory != nil {
+		for _, turn := range a.chatHistory.Recent(maxChatTurns) {
+			messages = append(messages, llm.Message{
+				Role:    turn.Role,
+				Content: turn.Content,
+			})
+		}
+	}
+
+	// Add current user message
+	messages = append(messages, llm.Message{Role: "user", Content: userText})
+
+	// Call LLM
+	reply, err := a.llm.Chat(ctx, messages)
+	if err != nil {
+		return "", err
+	}
+
+	// Store both sides in chat history for future turns
+	if a.chatHistory != nil {
+		a.chatHistory.Append("user", userText)
+		a.chatHistory.Append("assistant", reply)
+	}
+
+	return reply, nil
 }
 
 // runPostMortem asks the LLM to analyze a closed trade and write a lesson.
