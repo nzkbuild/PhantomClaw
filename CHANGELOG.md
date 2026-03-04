@@ -30,6 +30,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Bridge contract version header support (`X-Phantom-Bridge-Contract`) with major-version compatibility checks
 - SQLite schema metadata table (`metadata`) with startup schema-version guard
 - Deterministic bridge E2E regression test covering mocked MT5 signal/decision/trade-result plus mocked Telegram chat path
+- Dashboard endpoint tests for `/api/equity` and `/api/analytics` query handling
+- Memory tests ensuring trade summary, equity curve, and pair analytics exclude open trades
 
 ### Changed
 - EA now attaches `request_id` in signal payloads and includes it when polling `/decision`
@@ -57,6 +59,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versio
 - Market connectors (news/sentiment/COT) now wire rate limiter + recovery hooks into live fetch/cache paths
 - Bridge callbacks in main runtime now record recovery events and enforce LLM rate-limit guard in the signal path
 - EA now sends `X-Phantom-Bridge-Contract` header (configurable via `BridgeContractVersion`, default `v3`)
+- Dashboard snapshot risk thresholds now come from live runtime risk config (hot-reload consistent)
+- Dashboard bind hardening: non-loopback host without auth now forces loopback bind
+- Equity/analytics queries now operate on closed trades only (`closed_at IS NOT NULL`)
+- Router signal-switch guard now uses an atomic critical section to avoid mid-signal switch races
 
 ## [2.0.0] - 2026-03-02
 

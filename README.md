@@ -147,7 +147,7 @@ cd C:\PhantomClaw
 
 You should see:
 ```
-🐾 PhantomClaw v2.0.0 starting...
+🐾 PhantomClaw v4.0.0 starting...
 config loaded (mode=AUTO, tz=Asia/Kuala_Lumpur, pairs=[XAUUSD EURUSD USDJPY GBPUSD])
 memory: SQLite initialized
 sessions: store ready (dir=data/sessions)
