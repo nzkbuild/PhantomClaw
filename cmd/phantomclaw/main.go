@@ -37,6 +37,7 @@ import (
 	"github.com/nzkbuild/PhantomClaw/internal/telegram"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var version = "4.0.0"
@@ -160,13 +161,16 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	flag.Parse()
 
-	fmt.Printf("🐾 PhantomClaw v%s starting...\n", version)
+	// --- Banner ---
+	banner := logging.NewBanner(nil)
+	banner.Header(version)
 
 	// --- Load config ---
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	banner.Step("Config", logging.StatusOK, fmt.Sprintf("%s mode · %s", cfg.Bot.Mode, cfg.Bot.Timezone))
 
 	// --- Structured logging (zap) ---
 	zapLogger, err := logging.New(cfg.Memory.LogDir, cfg.Bot.LogLevel)
@@ -174,14 +178,26 @@ func main() {
 		log.Fatalf("logging: %v", err)
 	}
 	defer zapLogger.Sync()
-	zap.ReplaceGlobals(zapLogger)
-	restoreStdLog := zap.RedirectStdLog(zapLogger)
+	zap.ReplaceGlobals(zapLogger.Logger)
+	restoreStdLog := zap.RedirectStdLog(zapLogger.Logger)
 	defer restoreStdLog()
+
+	// Suppress console INFO/WARN during startup — file log still captures everything.
+	zapLogger.SetConsoleLevel(zapcore.ErrorLevel)
+
 	logger := zapLogger.Sugar()
 	logFilePath := filepath.Join(cfg.Memory.LogDir, "phantomclaw.log")
 	logger.Infow("config loaded", "mode", cfg.Bot.Mode, "tz", cfg.Bot.Timezone, "pairs", cfg.Pairs)
-	for _, warning := range config.SecretWarnings(cfg) {
-		logger.Warnw("security: config secret detected", "warning", warning)
+
+	// --- Secrets check ---
+	warnings := config.SecretWarnings(cfg)
+	if len(warnings) > 0 {
+		for _, warning := range warnings {
+			logger.Warnw("security: config secret detected", "warning", warning)
+		}
+		banner.Step("Secrets", logging.StatusWarn, fmt.Sprintf("%d secret(s) in config — move to .secrets", len(warnings)))
+	} else {
+		banner.Step("Secrets", logging.StatusOK, "clean")
 	}
 	var stickyPrimary atomic.Bool
 	stickyPrimary.Store(cfg.LLM.StickyPrimary)
@@ -202,10 +218,12 @@ func main() {
 	}
 	defer db.Close()
 	logger.Info("memory: SQLite initialized")
+	banner.Step("Memory", logging.StatusOK, "SQLite ready")
 
 	// --- Risk engine ---
 	riskEngine := risk.NewEngine(cfg.Risk)
 	logger.Info("risk: engine initialized")
+	banner.Step("Risk", logging.StatusOK, fmt.Sprintf("max %.2f lot · $%.0f daily limit", cfg.Risk.MaxLotSize, cfg.Risk.MaxDailyLossUSD))
 
 	// --- Safety mode manager ---
 	safetyMgr, err := safety.NewManager(
@@ -296,8 +314,14 @@ func main() {
 			"aliases", cfg.LLM.Aliases,
 			"sticky_primary", cfg.LLM.StickyPrimary,
 		)
+		if len(ordered) > 1 {
+			banner.Step("Providers", logging.StatusOK, fmt.Sprintf("%s (primary) + %d fallback(s)", ordered[0].Name(), len(ordered)-1))
+		} else {
+			banner.Step("Providers", logging.StatusOK, ordered[0].Name()+" (primary)")
+		}
 	} else {
 		logger.Warn("llm: NO providers configured — agent brain disabled")
+		banner.Step("Providers", logging.StatusFail, "none configured — agent brain disabled")
 	}
 
 	// --- Data connectors ---
@@ -683,8 +707,15 @@ func main() {
 		return diagnosticsSnapshot(), nil
 	})
 
-	dashboardHost := cfg.Bridge.Host
-	dashboardPort := 8080
+	// --- Dashboard setup ---
+	dashboardHost := cfg.Dashboard.Host
+	if dashboardHost == "" {
+		dashboardHost = cfg.Bridge.Host
+	}
+	dashboardPort := cfg.Dashboard.Port
+	if dashboardPort <= 0 {
+		dashboardPort = 8080
+	}
 	selectedDashboardPort, dashboardPortErr := firstAvailableTCPPort(dashboardHost, dashboardPort, 10)
 	if dashboardPortErr != nil {
 		logger.Warnw("dashboard: disabled (no available port)",
@@ -702,23 +733,40 @@ func main() {
 	}
 	dashboardPort = selectedDashboardPort
 
+	// Open read-only DB for dashboard queries (avoids write contention).
+	var dashDB *memory.DB
+	if dashboardPort != 0 {
+		var roErr error
+		dashDB, roErr = memory.NewReadOnlyDB(cfg.Memory.DBPath)
+		if roErr != nil {
+			logger.Warnw("dashboard: read-only DB failed, falling back to shared connection", "error", roErr)
+			dashDB = db
+		} else {
+			defer dashDB.Close()
+		}
+	}
+
+	authMiddleware := dashboard.BasicAuth(cfg.Dashboard.AuthUser, cfg.Dashboard.AuthPass)
+
 	var dashboardServer *dashboard.Server
 	if dashboardPort != 0 {
 		dashboardServer = dashboard.New(dashboardHost, dashboardPort, dashboard.Dependencies{
 			Snapshot: func(ctx context.Context) (map[string]any, error) {
 				stats := riskEngine.Stats()
 				return map[string]any{
-					"mode":           safetyMgr.CurrentMode(),
-					"session":        sched.CurrentSession(),
-					"daily_loss":     stats.DailyLoss,
-					"open_positions": stats.OpenPositions,
-					"max_positions":  stats.MaxPositions,
-					"halted":         stats.Halted,
-					"time":           time.Now().UTC().Format(time.RFC3339),
+					"mode":             safetyMgr.CurrentMode(),
+					"session":          sched.CurrentSession(),
+					"daily_loss":       stats.DailyLoss,
+					"open_positions":   stats.OpenPositions,
+					"max_positions":    stats.MaxPositions,
+					"max_daily_loss":   cfg.Risk.MaxDailyLossUSD,
+					"max_drawdown_pct": cfg.Risk.MaxDrawdownPct,
+					"halted":           stats.Halted,
+					"time":             time.Now().UTC().Format(time.RFC3339),
 				}, nil
 			},
 			Decisions: func(ctx context.Context, limit int, symbol string) (map[string]any, error) {
-				rows, err := db.ListDecisionHistory(limit, symbol)
+				rows, err := dashDB.ListDecisionHistory(limit, symbol)
 				if err != nil {
 					return nil, err
 				}
@@ -777,7 +825,7 @@ func main() {
 					"logs":  rows,
 				}, nil
 			},
-		})
+		}, authMiddleware)
 	}
 
 	// --- Session alerts ---
@@ -891,6 +939,29 @@ func main() {
 		go tgBot.Start(ctx)
 	}
 
+	// --- Banner: service status ---
+	banner.Step("Bridge", logging.StatusOK, fmt.Sprintf("%s:%d", cfg.Bridge.Host, cfg.Bridge.Port))
+
+	if dashboardServer != nil {
+		if dashboardPort != 8080 {
+			banner.Step("Dashboard", logging.StatusWarn, fmt.Sprintf("http://%s:%d (port 8080 taken)", dashboardHost, dashboardPort))
+		} else {
+			banner.Step("Dashboard", logging.StatusOK, fmt.Sprintf("http://%s:%d", dashboardHost, dashboardPort))
+		}
+	} else {
+		banner.Step("Dashboard", logging.StatusFail, "disabled (no port)")
+	}
+
+	if tgBot != nil {
+		banner.Step("Telegram", logging.StatusOK, "connected")
+	} else {
+		banner.Step("Telegram", logging.StatusFail, "no token (skipped)")
+	}
+
+	banner.Step("Hot Reload", logging.StatusOK, "watching "+*configPath)
+
+	banner.Ready("Ready. Waiting for EA signals...")
+
 	dashboardAddr := "disabled"
 	if dashboardServer != nil {
 		dashboardAddr = fmt.Sprintf("%s:%d", dashboardHost, dashboardPort)
@@ -903,6 +974,9 @@ func main() {
 		"bridge", fmt.Sprintf("%s:%d", cfg.Bridge.Host, cfg.Bridge.Port),
 		"dashboard", dashboardAddr,
 	)
+
+	// Restore console logging now that startup is complete.
+	zapLogger.SetConsoleLevel(zapcore.InfoLevel)
 
 	// --- Graceful shutdown ---
 	sigCh := make(chan os.Signal, 1)

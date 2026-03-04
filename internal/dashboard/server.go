@@ -36,7 +36,8 @@ type Server struct {
 }
 
 // New creates a dashboard server.
-func New(host string, port int, deps Dependencies) *Server {
+// authMiddleware wraps all routes with auth; pass nil to skip auth.
+func New(host string, port int, deps Dependencies, authMiddleware func(http.Handler) http.Handler) *Server {
 	s := &Server{
 		host: host,
 		port: port,
@@ -44,9 +45,15 @@ func New(host string, port int, deps Dependencies) *Server {
 		mux:  http.NewServeMux(),
 	}
 	s.registerRoutes()
+
+	var handler http.Handler = s.mux
+	if authMiddleware != nil {
+		handler = authMiddleware(handler)
+	}
+
 	s.server = &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", host, port),
-		Handler:           s.mux,
+		Handler:           handler,
 		ReadTimeout:       5 * time.Second,
 		ReadHeaderTimeout: 3 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -128,7 +135,20 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
-	s.respondWithProvider(w, r, s.deps.Diagnostics)
+	if s.deps.Diagnostics == nil {
+		http.Error(w, `{"error":"diagnostics unavailable"}`, http.StatusNotImplemented)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	data, err := s.deps.Diagnostics(ctx)
+	if err != nil {
+		http.Error(w, `{"error":"diagnostics failed"}`, http.StatusInternalServerError)
+		return
+	}
+	// Redact sensitive fields before sending to browser.
+	RedactMap(data)
+	writeJSON(w, data)
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {

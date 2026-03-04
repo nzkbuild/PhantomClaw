@@ -53,6 +53,23 @@ func NewDB(dbPath string) (*DB, error) {
 	return &DB{conn: conn}, nil
 }
 
+// NewReadOnlyDB opens a read-only connection to an existing SQLite database.
+// Use this for dashboard/API queries to avoid contention with the main write connection.
+func NewReadOnlyDB(dbPath string) (*DB, error) {
+	conn, err := sql.Open("sqlite", dbPath+"?mode=ro&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return nil, fmt.Errorf("memory: open read-only db: %w", err)
+	}
+	conn.SetMaxOpenConns(2)
+	conn.SetMaxIdleConns(1)
+	// Verify connectivity
+	if err := conn.Ping(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("memory: read-only db ping failed: %w", err)
+	}
+	return &DB{conn: conn}, nil
+}
+
 func ensureSchemaVersion(conn *sql.DB) error {
 	var value string
 	err := conn.QueryRow(`SELECT value FROM metadata WHERE key = 'schema_version'`).Scan(&value)

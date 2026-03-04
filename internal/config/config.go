@@ -25,7 +25,16 @@ type Config struct {
 	Sessions  SessionConfig   `mapstructure:"sessions"`
 	Memory    MemoryConfig    `mapstructure:"memory"`
 	Heartbeat HeartbeatConfig `mapstructure:"heartbeat"`
+	Dashboard DashboardConfig `mapstructure:"dashboard"`
 	Pairs     []string        `mapstructure:"pairs"`
+}
+
+// DashboardConfig holds web dashboard settings.
+type DashboardConfig struct {
+	Host     string `mapstructure:"host"`
+	Port     int    `mapstructure:"port"`
+	AuthUser string `mapstructure:"auth_user"`
+	AuthPass string `mapstructure:"auth_pass"`
 }
 
 // HeartbeatConfig holds periodic health check settings.
@@ -406,6 +415,11 @@ func buildViper(path string) (*viper.Viper, string) {
 
 	v.SetDefault("llm.primary", "claude")
 	v.SetDefault("llm.sticky_primary", true)
+
+	v.SetDefault("dashboard.host", "127.0.0.1")
+	v.SetDefault("dashboard.port", 8080)
+	v.SetDefault("dashboard.auth_user", "")
+	v.SetDefault("dashboard.auth_pass", "")
 
 	v.SetDefault("pairs", []string{"XAUUSD", "EURUSD", "USDJPY", "GBPUSD"})
 

@@ -13,7 +13,7 @@ import (
 )
 
 func TestDashboardIndexServesHTML(t *testing.T) {
-	s := New("127.0.0.1", 8080, Dependencies{})
+	s := New("127.0.0.1", 8080, Dependencies{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -34,7 +34,7 @@ func TestDashboardSnapshotEndpoint(t *testing.T) {
 				"mode": "AUTO",
 			}, nil
 		},
-	})
+	}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/snapshot", nil)
@@ -62,7 +62,7 @@ func TestDashboardLogsEndpointParsesFilters(t *testing.T) {
 				"logs":  []map[string]any{},
 			}, nil
 		},
-	})
+	}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(

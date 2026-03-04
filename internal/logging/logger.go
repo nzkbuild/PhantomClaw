@@ -8,9 +8,22 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// Logger wraps zap.Logger and exposes console level control.
+type Logger struct {
+	*zap.Logger
+	consoleLevel zap.AtomicLevel
+}
+
+// SetConsoleLevel changes the minimum log level shown on the console.
+// Use this to suppress INFO during startup, then restore it afterwards.
+func (l *Logger) SetConsoleLevel(level zapcore.Level) {
+	l.consoleLevel.SetLevel(level)
+}
+
 // New creates a structured JSON logger with daily rotation.
 // Writes to both stdout and a log file.
-func New(logDir, level string) (*zap.Logger, error) {
+// The returned Logger allows runtime control of the console log level.
+func New(logDir, level string) (*Logger, error) {
 	// Parse log level
 	var zapLevel zapcore.Level
 	switch level {
@@ -53,9 +66,10 @@ func New(logDir, level string) (*zap.Logger, error) {
 		return nil, err
 	}
 
-	// Console output — human-readable
+	// Console output — human-readable, with dynamic level control
 	consoleCfg := encoderCfg
 	consoleCfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	consoleLevel := zap.NewAtomicLevelAt(zapLevel)
 
 	core := zapcore.NewTee(
 		zapcore.NewCore(
@@ -66,11 +80,14 @@ func New(logDir, level string) (*zap.Logger, error) {
 		zapcore.NewCore(
 			zapcore.NewConsoleEncoder(consoleCfg),
 			zapcore.AddSync(os.Stdout),
-			zapLevel,
+			consoleLevel,
 		),
 	)
 
-	return zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel)), nil
+	return &Logger{
+		Logger:       zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel)),
+		consoleLevel: consoleLevel,
+	}, nil
 }
 
 // TradeFields creates structured fields for trade logging.
