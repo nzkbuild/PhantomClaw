@@ -4,6 +4,7 @@ type SSEOptions = {
     onSnapshot?: (data: unknown) => void
     onLog?: (data: unknown) => void
     onNotification?: (data: unknown) => void
+    onOps?: (data: unknown) => void
 }
 
 export function useSSE(url: string, options: SSEOptions) {
@@ -31,6 +32,13 @@ export function useSSE(url: string, options: SSEOptions) {
             try {
                 const data = JSON.parse(e.data)
                 optionsRef.current.onNotification?.(data)
+            } catch { /* ignore */ }
+        })
+
+        es.addEventListener('ops', (e) => {
+            try {
+                const data = JSON.parse(e.data)
+                optionsRef.current.onOps?.(data)
             } catch { /* ignore */ }
         })
 

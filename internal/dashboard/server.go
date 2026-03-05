@@ -507,6 +507,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	componentFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("component")))
 	containsFilter := strings.TrimSpace(r.URL.Query().Get("contains"))
 	var lastLogTs time.Time
+	var lastMode string
+	var lastHalted *bool
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
@@ -523,6 +525,31 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				if err == nil {
 					if !sendEvent("snapshot", snap) {
 						return
+					}
+					// Detect mode/halted changes → emit notification
+					if mode, ok := snap["mode"].(string); ok {
+						if lastMode != "" && mode != lastMode {
+							sendEvent("notification", map[string]any{
+								"type":    "mode_change",
+								"message": "Mode changed to " + mode,
+								"ts":      time.Now().UTC().Format(time.RFC3339),
+							})
+						}
+						lastMode = mode
+					}
+					if halted, ok := snap["halted"].(bool); ok {
+						if lastHalted != nil && halted != *lastHalted {
+							msg := "Trading resumed"
+							if halted {
+								msg = "Trading HALTED — daily loss limit reached"
+							}
+							sendEvent("notification", map[string]any{
+								"type":    "halt_change",
+								"message": msg,
+								"ts":      time.Now().UTC().Format(time.RFC3339),
+							})
+						}
+						lastHalted = &halted
 					}
 				}
 			}

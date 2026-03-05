@@ -14,8 +14,9 @@ export function ProvidersView() {
 
     const fetchProviders = () => {
         getDiagnostics().then((diag) => {
-            const providerStatus = (diag.provider_status || {}) as Record<string, string>
-            const primary = (diag.primary_provider || '') as string
+            const llm = (diag.llm || {}) as Record<string, unknown>
+            const providerStatus = (llm.providers || {}) as Record<string, string>
+            const primary = (llm.current_provider || '') as string
             setCurrent(primary)
             const entries = Object.entries(providerStatus).map(([name, status]) => ({
                 name,

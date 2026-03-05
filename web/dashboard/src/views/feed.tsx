@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useCallback } from 'react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { ArrowUpCircle, ArrowDownCircle, MinusCircle, Zap } from 'lucide-react'
-import { useSSE } from '@/hooks/use-data'
+import { useInterval } from '@/hooks/use-data'
+import { getDecisions } from '@/lib/api'
 
 type TradeEvent = {
     id: string
@@ -17,30 +18,21 @@ type TradeEvent = {
 export function FeedView() {
     const [events, setEvents] = useState<TradeEvent[]>([])
 
-    useSSE('/api/events', {
-        onSnapshot: (data) => {
-            const d = data as { trades?: TradeEvent[] }
-            if (d.trades?.length) setEvents((prev) => [...d.trades!, ...prev].slice(0, 100))
-        },
-    })
-
-    // Also poll decisions as feed items
-    useEffect(() => {
-        fetch('/api/decisions?limit=20')
-            .then((r) => r.json())
-            .then((d) => {
-                const decisions = (d.decisions || []).map((dec: Record<string, unknown>) => ({
-                    id: `dec-${dec.id}`,
-                    symbol: dec.symbol as string,
-                    action: dec.decision as string,
-                    price: 0,
-                    lot: 0,
-                    ts: dec.created_at as string,
-                }))
-                setEvents((prev) => [...decisions, ...prev].slice(0, 100))
-            })
-            .catch(() => { })
+    const pollDecisions = useCallback(() => {
+        getDecisions(20).then((d) => {
+            const decisions = (d.decisions || []).map((dec) => ({
+                id: `dec-${dec.id}`,
+                symbol: dec.symbol,
+                action: dec.decision,
+                price: 0,
+                lot: 0,
+                ts: dec.created_at,
+            }))
+            setEvents(decisions)
+        }).catch(() => { })
     }, [])
+
+    useInterval(pollDecisions, 5000)
 
     return (
         <div className="space-y-4">
