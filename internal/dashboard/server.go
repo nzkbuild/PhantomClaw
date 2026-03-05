@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,8 +14,8 @@ import (
 	"github.com/nzkbuild/PhantomClaw/internal/bridge"
 )
 
-//go:embed assets/index.html
-var embeddedAssets embed.FS
+//go:embed all:assets/dist
+var embeddedDist embed.FS
 
 // Dependencies provide dashboard API data.
 type Dependencies struct {
@@ -26,9 +27,12 @@ type Dependencies struct {
 	Logs        func(ctx context.Context, query bridge.LogQuery) (map[string]any, error)
 	Equity      func(ctx context.Context, days int) (map[string]any, error)
 	Analytics   func(ctx context.Context, days int) (map[string]any, error)
-	// SwitchModel requests a primary provider switch by name (e.g. "gemini-flash").
-	// Returns an error if the name is unknown or the switch is rejected.
+	// SwitchModel requests a primary provider switch.
 	SwitchModel func(ctx context.Context, name string) error
+	// SwitchMode changes the safety mode (OBSERVE, SUGGEST, AUTO, HALT).
+	SwitchMode func(ctx context.Context, mode string) error
+	// Chat handles a chat message and returns a reply.
+	Chat func(ctx context.Context, message string) (string, error)
 }
 
 // Server hosts dashboard UI and API.
@@ -86,7 +90,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) registerRoutes() {
-	s.mux.HandleFunc("GET /", s.handleIndex)
+	// API routes
 	s.mux.HandleFunc("GET /api/snapshot", s.handleSnapshot)
 	s.mux.HandleFunc("GET /api/decisions", s.handleDecisions)
 	s.mux.HandleFunc("GET /api/sessions", s.handleSessions)
@@ -97,16 +101,78 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/analytics", s.handleAnalytics)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	s.mux.HandleFunc("POST /api/switch-model", s.handleSwitchModel)
+	s.mux.HandleFunc("POST /api/mode", s.handleSwitchMode)
+	s.mux.HandleFunc("POST /api/chat", s.handleChat)
+
+	// SPA: serve Vite dist/ for all non-API routes
+	dist, err := fs.Sub(embeddedDist, "assets/dist")
+	if err != nil {
+		panic("dashboard dist assets missing: " + err.Error())
+	}
+	fileServer := http.FileServer(http.FS(dist))
+	s.mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		// Try to serve static file, fall back to index.html for SPA routing
+		path := r.URL.Path
+		if path == "/" {
+			path = "index.html"
+		} else {
+			path = strings.TrimPrefix(path, "/")
+		}
+		if _, err := fs.Stat(dist, path); err != nil {
+			// SPA fallback: serve index.html for unknown paths
+			r.URL.Path = "/"
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	data, err := embeddedAssets.ReadFile("assets/index.html")
-	if err != nil {
-		http.Error(w, "dashboard asset missing", http.StatusInternalServerError)
+// handleSwitchMode accepts POST /api/mode with JSON body {"mode": "OBSERVE"}.
+func (s *Server) handleSwitchMode(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SwitchMode == nil {
+		http.Error(w, `{"error":"mode switch not available"}`, http.StatusNotImplemented)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(data)
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Mode == "" {
+		http.Error(w, `{"error":"mode is required"}`, http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := s.deps.SwitchMode(ctx, body.Mode); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"status": "ok", "mode": body.Mode})
+}
+
+// handleChat accepts POST /api/chat with JSON body {"message": "..."}.
+func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Chat == nil {
+		http.Error(w, `{"error":"chat not available"}`, http.StatusNotImplemented)
+		return
+	}
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Message == "" {
+		http.Error(w, `{"error":"message is required"}`, http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	reply, err := s.deps.Chat(ctx, body.Message)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"reply": reply})
 }
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {

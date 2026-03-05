@@ -995,6 +995,23 @@ func main() {
 				llmRouter.SetPrimaryQueued(p)
 				return nil
 			},
+			SwitchMode: func(_ context.Context, mode string) error {
+				if safetyMgr == nil {
+					return fmt.Errorf("safety manager not configured")
+				}
+				parsed, err := safety.ParseMode(strings.ToUpper(strings.TrimSpace(mode)))
+				if err != nil {
+					return err
+				}
+				safetyMgr.SetMode(parsed)
+				return nil
+			},
+			Chat: func(ctx context.Context, message string) (string, error) {
+				if brain == nil {
+					return "", fmt.Errorf("agent not configured")
+				}
+				return brain.HandleChat(ctx, message)
+			},
 		}, authMiddleware)
 	}
 
