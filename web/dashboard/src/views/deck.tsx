@@ -20,9 +20,9 @@ export function DeckView({ snapshot: _sseSnapshot, onSnapshot }: { snapshot: unk
     const [switching, setSwitching] = useState(false)
 
     const fetchSnap = () => {
-        getSnapshot().then((r) => {
-            setSnap(r.snapshot)
-            onSnapshot(r.snapshot)
+        getSnapshot().then((snap) => {
+            setSnap(snap)
+            onSnapshot(snap)
         }).catch(() => { })
     }
 
@@ -30,10 +30,12 @@ export function DeckView({ snapshot: _sseSnapshot, onSnapshot }: { snapshot: unk
     useInterval(fetchSnap, 5000)
     useSSE('/api/events', {
         onSnapshot: (data) => {
-            const d = data as { snapshot?: Snapshot }
-            if (d.snapshot) {
-                setSnap(d.snapshot)
-                onSnapshot(d.snapshot)
+            const d = data as { snapshot?: Snapshot } & Snapshot
+            // SSE may wrap in snapshot key or send flat
+            const s = d.snapshot || d
+            if (s.mode) {
+                setSnap(s)
+                onSnapshot(s)
             }
         },
     })
@@ -77,15 +79,15 @@ export function DeckView({ snapshot: _sseSnapshot, onSnapshot }: { snapshot: unk
                 <KPICard icon={Clock} label="SESSION" value={snap.session || 'N/A'} />
                 <KPICard
                     icon={TrendingUp}
-                    label="DAILY P&L"
-                    value={`$${(snap.daily_pnl ?? 0).toFixed(2)}`}
-                    accent={(snap.daily_pnl ?? 0) >= 0 ? 'text-ok' : 'text-bad'}
+                    label="DAILY LOSS"
+                    value={`$${(snap.daily_loss ?? 0).toFixed(2)}`}
+                    accent={(snap.daily_loss ?? 0) > 0 ? 'text-bad' : 'text-ok'}
                 />
                 <KPICard
                     icon={AlertTriangle}
-                    label="DAILY LOSS"
-                    value={`$${(snap.daily_loss ?? 0).toFixed(2)}`}
-                    accent={(snap.daily_loss ?? 0) > 50 ? 'text-bad' : 'text-muted'}
+                    label="MAX LOSS"
+                    value={`$${(snap.max_daily_loss ?? 0).toFixed(2)}`}
+                    accent={(snap.daily_loss ?? 0) > (snap.max_daily_loss ?? 100) * 0.8 ? 'text-bad' : 'text-muted'}
                 />
             </div>
 
@@ -102,14 +104,16 @@ export function DeckView({ snapshot: _sseSnapshot, onSnapshot }: { snapshot: unk
                 <Card className="bg-surface border-border">
                     <CardContent className="p-4">
                         <div className="text-[10px] font-semibold tracking-[.12em] uppercase text-muted mb-2">Win Rate (7d)</div>
-                        <div className="font-mono text-xl font-semibold">{((snap.win_rate_7d ?? 0) * 100).toFixed(0)}%</div>
+                        <div className="font-mono text-xl font-semibold">{snap.session || 'N/A'}</div>
                     </CardContent>
                 </Card>
                 <Card className="bg-surface border-border">
                     <CardContent className="p-4">
-                        <div className="text-[10px] font-semibold tracking-[.12em] uppercase text-muted mb-2">Provider</div>
+                        <div className="text-[10px] font-semibold tracking-[.12em] uppercase text-muted mb-2">Status</div>
                         <div className="flex items-center gap-2">
-                            <Badge variant="outline" className="font-mono text-xs">{snap.provider}</Badge>
+                            <Badge variant="outline" className={`font-mono text-xs ${snap.halted ? 'text-bad border-bad-dim' : 'text-ok border-ok-dim'}`}>
+                                {snap.halted ? 'HALTED' : 'RUNNING'}
+                            </Badge>
                         </div>
                     </CardContent>
                 </Card>

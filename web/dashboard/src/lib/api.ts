@@ -20,18 +20,18 @@ export function apiPost<T>(path: string, body?: unknown): Promise<T> {
 
 /* ── Typed API helpers ── */
 
+// Snapshot fields match backend main.go Snapshot dep output (flat map)
 export type Snapshot = {
     mode: string
     session: string
     open_positions: number
     max_positions: number
     daily_loss: number
-    daily_pnl: number
-    win_rate_7d: number
-    total_trades_7d: number
-    uptime: string
-    provider: string
-    provider_status: Record<string, string>
+    max_daily_loss: number
+    max_drawdown_pct: number
+    halted: boolean
+    time: string
+    last_signal_time?: string
 }
 
 export type Decision = {
@@ -49,13 +49,33 @@ export type ProviderInfo = {
     is_primary: boolean
 }
 
-export const getSnapshot = () => api<{ snapshot: Snapshot }>('/api/snapshot')
+// All backend handlers return flat maps via writeJSON(w, result)
+// No nesting like { snapshot: ... } — the fields ARE the response
+export const getSnapshot = () => api<Snapshot>('/api/snapshot')
 export const getDecisions = (limit = 20, symbol = '') =>
-    api<{ decisions: Decision[] }>(`/api/decisions?limit=${limit}&symbol=${symbol}`)
-export const getEquity = (days = 30) => api<{ equity: unknown[] }>(`/api/equity?days=${days}`)
-export const getAnalytics = (days = 7) => api<{ analytics: unknown }>(`/api/analytics?days=${days}`)
-export const getDiagnostics = () => api<{ diagnostics: unknown }>('/api/diagnostics')
-export const getLogs = (limit = 100) => api<{ logs: unknown[] }>(`/api/logs?limit=${limit}`)
+    api<{ count: number; decisions: Decision[] }>(`/api/decisions?limit=${limit}&symbol=${symbol}`)
+export const getEquity = (days = 30) => api<{ days: number; points: unknown[] }>(`/api/equity?days=${days}`)
+export const getAnalytics = (days = 7) => api<{ days: number; summary: unknown; pairs: unknown[] }>(`/api/analytics?days=${days}`)
+export const getDiagnostics = () => api<Record<string, unknown>>('/api/diagnostics')
+export const getLogs = (limit = 100) => api<{ count: number; logs: unknown[] }>(`/api/logs?limit=${limit}`)
+
+// Usage returns { usage: [...], total_tokens, total_requests }
+export const getUsage = () => api<{ usage: unknown[]; total_tokens: number; total_requests: number }>('/api/usage')
+
+// Config returns { files: [{name, path, content}, ...] }
+export const getConfig = () => api<{ files: { name: string; path: string; content: string }[] }>('/api/config')
+export const saveConfig = (file: string, content: string) => apiPost<{ status: string }>('/api/config', { file, content })
+
+// Sessions returns { sessions: [...] }
+export const getSessionsList = () => api<{ sessions: unknown[] }>('/api/sessions/list')
+
+// Risk returns { risk: { max_lot, max_daily_loss, current_daily_loss, ... } }
+export const getRisk = () => api<{ risk: Record<string, unknown> }>('/api/risk')
+
+// Cron
+export const getCron = () => api<{ jobs: unknown[] }>('/api/cron')
+export const fireCron = (id: string) => apiPost(`/api/cron/${id}/fire`)
+export const toggleCron = (id: string) => apiPost(`/api/cron/${id}/toggle`)
 
 export const switchMode = (mode: string) => apiPost('/api/mode', { mode })
 export const switchModel = (name: string) => apiPost(`/api/switch-model?name=${name}`)

@@ -3,7 +3,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Star, RefreshCw, Cpu } from 'lucide-react'
-import { getSnapshot, switchModel } from '@/lib/api'
+import { getDiagnostics, switchModel } from '@/lib/api'
 
 type ProviderEntry = { name: string; status: string; isPrimary: boolean }
 
@@ -13,13 +13,14 @@ export function ProvidersView() {
     const [switching, setSwitching] = useState(false)
 
     const fetchProviders = () => {
-        getSnapshot().then((r) => {
-            const snap = r.snapshot
-            setCurrent(snap.provider)
-            const entries = Object.entries(snap.provider_status || {}).map(([name, status]) => ({
+        getDiagnostics().then((diag) => {
+            const providerStatus = (diag.provider_status || {}) as Record<string, string>
+            const primary = (diag.primary_provider || '') as string
+            setCurrent(primary)
+            const entries = Object.entries(providerStatus).map(([name, status]) => ({
                 name,
                 status: status as string,
-                isPrimary: name === snap.provider,
+                isPrimary: name === primary,
             }))
             setProviders(entries)
         }).catch(() => { })
