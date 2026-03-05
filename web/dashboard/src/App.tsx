@@ -16,6 +16,9 @@ import { SessionsView } from '@/views/sessions'
 import { RiskView } from '@/views/risk'
 import { CronView } from '@/views/cron'
 import { FeedView } from '@/views/feed'
+import { EquityView } from '@/views/equity'
+import { AnalyticsView } from '@/views/analytics'
+import { DiagnosticsView } from '@/views/diagnostics'
 import { CommandPalette } from '@/components/command-palette'
 import { NotificationCenter } from '@/components/notifications'
 import { ThemeProvider, ThemeSwitcher } from '@/components/theme-provider'
@@ -158,9 +161,9 @@ export default function App() {
             {view === 'cron' && <CronView />}
             {view === 'feed' && <FeedView />}
             {view === 'theme' && <ThemeSettingsView />}
-            {view === 'equity' && <PlaceholderView name="Equity" />}
-            {view === 'analytics' && <PlaceholderView name="Analytics" />}
-            {view === 'diagnostics' && <PlaceholderView name="Diagnostics" />}
+            {view === 'equity' && <EquityView />}
+            {view === 'analytics' && <AnalyticsView />}
+            {view === 'diagnostics' && <DiagnosticsView />}
           </div>
 
           {/* Mobile bottom tabs */}
@@ -201,10 +204,3 @@ function ThemeSettingsView() {
   )
 }
 
-function PlaceholderView({ name }: { name: string }) {
-  return (
-    <div className="flex items-center justify-center h-64 text-muted text-sm">
-      {name} view — coming soon
-    </div>
-  )
-}
