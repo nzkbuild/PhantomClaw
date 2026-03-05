@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { Bell, X, AlertTriangle, Info, CheckCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSSE } from '@/hooks/use-data'
@@ -28,6 +28,17 @@ const COLORS = {
 export function NotificationCenter() {
     const [notifications, setNotifications] = useState<Notification[]>([])
     const [open, setOpen] = useState(false)
+    const ref = useRef<HTMLDivElement>(null)
+
+    // Click-away to close
+    useEffect(() => {
+        if (!open) return
+        const handler = (e: MouseEvent) => {
+            if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+        }
+        document.addEventListener('mousedown', handler)
+        return () => document.removeEventListener('mousedown', handler)
+    }, [open])
 
     const addNotification = useCallback((n: Omit<Notification, 'id' | 'ts' | 'read'>) => {
         setNotifications((prev) => [{
@@ -55,7 +66,7 @@ export function NotificationCenter() {
     const markAllRead = () => setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
 
     return (
-        <div className="relative">
+        <div className="relative" ref={ref}>
             <button
                 onClick={() => { setOpen(!open); if (!open) markAllRead() }}
                 className="relative p-2 rounded-lg hover:bg-surface-2 transition-colors"

@@ -20,7 +20,7 @@ export function FeedView() {
     useSSE('/api/events', {
         onSnapshot: (data) => {
             const d = data as { trades?: TradeEvent[] }
-            if (d.trades) setEvents((prev) => [...d.trades!, ...prev].slice(0, 100))
+            if (d.trades?.length) setEvents((prev) => [...d.trades!, ...prev].slice(0, 100))
         },
     })
 

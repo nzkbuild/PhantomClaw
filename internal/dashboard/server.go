@@ -242,6 +242,12 @@ func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"file and content required"}`, http.StatusBadRequest)
 		return
 	}
+	// Whitelist allowed config files to prevent path-traversal
+	allowed := map[string]bool{"config.yaml": true, "soul.md": true}
+	if !allowed[body.File] {
+		http.Error(w, `{"error":"file not allowed"}`, http.StatusForbidden)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	if err := s.deps.SaveConfig(ctx, body.File, body.Content); err != nil {

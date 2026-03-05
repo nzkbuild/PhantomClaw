@@ -1,11 +1,16 @@
 const BASE = ''
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(`${BASE}${path}`, {
-        ...init,
-        headers: { 'Content-Type': 'application/json', ...init?.headers },
-    })
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    const headers: Record<string, string> = { ...init?.headers as Record<string, string> }
+    const method = init?.method?.toUpperCase() ?? 'GET'
+    if (method !== 'GET' && method !== 'HEAD') {
+        headers['Content-Type'] = headers['Content-Type'] ?? 'application/json'
+    }
+    const res = await fetch(`${BASE}${path}`, { ...init, headers })
+    if (!res.ok) {
+        const body = await res.text().catch(() => '')
+        throw new Error(body || `${res.status} ${res.statusText}`)
+    }
     return res.json()
 }
 
