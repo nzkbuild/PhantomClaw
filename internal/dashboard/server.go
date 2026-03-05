@@ -33,6 +33,22 @@ type Dependencies struct {
 	SwitchMode func(ctx context.Context, mode string) error
 	// Chat handles a chat message and returns a reply.
 	Chat func(ctx context.Context, message string) (string, error)
+	// Usage returns LLM usage stats for N days.
+	Usage func(ctx context.Context, days int) (map[string]any, error)
+	// Config returns editable config files.
+	Config func(ctx context.Context) (map[string]any, error)
+	// SaveConfig saves a config file.
+	SaveConfig func(ctx context.Context, file string, content string) error
+	// SessionsList returns chat session summaries.
+	SessionsList func(ctx context.Context) (map[string]any, error)
+	// Risk returns current risk metrics.
+	Risk func(ctx context.Context) (map[string]any, error)
+	// Cron returns scheduled jobs.
+	Cron func(ctx context.Context) (map[string]any, error)
+	// CronFire triggers a job.
+	CronFire func(ctx context.Context, id string) error
+	// CronToggle toggles a job.
+	CronToggle func(ctx context.Context, id string) error
 }
 
 // Server hosts dashboard UI and API.
@@ -103,6 +119,13 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/switch-model", s.handleSwitchModel)
 	s.mux.HandleFunc("POST /api/mode", s.handleSwitchMode)
 	s.mux.HandleFunc("POST /api/chat", s.handleChat)
+	s.mux.HandleFunc("GET /api/usage", s.handleUsage)
+	s.mux.HandleFunc("GET /api/config", s.handleConfigGet)
+	s.mux.HandleFunc("POST /api/config", s.handleConfigSave)
+	s.mux.HandleFunc("GET /api/sessions/list", s.handleSessionsList)
+	s.mux.HandleFunc("GET /api/risk", s.handleRisk)
+	s.mux.HandleFunc("GET /api/cron", s.handleCron)
+	s.mux.HandleFunc("POST /api/cron/", s.handleCronAction)
 
 	// SPA: serve Vite dist/ for all non-API routes
 	dist, err := fs.Sub(embeddedDist, "assets/dist")
@@ -173,6 +196,143 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"reply": reply})
+}
+
+func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Usage == nil {
+		http.Error(w, `{"error":"usage provider unavailable"}`, http.StatusNotImplemented)
+		return
+	}
+	days := parsePositiveInt(r.URL.Query().Get("days"), 7, 365)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	data, err := s.deps.Usage(ctx, days)
+	if err != nil {
+		http.Error(w, `{"error":"failed to load usage"}`, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, data)
+}
+
+func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Config == nil {
+		http.Error(w, `{"error":"config provider unavailable"}`, http.StatusNotImplemented)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	data, err := s.deps.Config(ctx)
+	if err != nil {
+		http.Error(w, `{"error":"failed to load config"}`, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, data)
+}
+
+func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SaveConfig == nil {
+		http.Error(w, `{"error":"config save unavailable"}`, http.StatusNotImplemented)
+		return
+	}
+	var body struct {
+		File    string `json:"file"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.File == "" {
+		http.Error(w, `{"error":"file and content required"}`, http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if err := s.deps.SaveConfig(ctx, body.File, body.Content); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"status": "saved", "file": body.File})
+}
+
+func (s *Server) handleSessionsList(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SessionsList == nil {
+		http.Error(w, `{"error":"sessions list unavailable"}`, http.StatusNotImplemented)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	data, err := s.deps.SessionsList(ctx)
+	if err != nil {
+		http.Error(w, `{"error":"failed to load sessions"}`, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, data)
+}
+
+func (s *Server) handleRisk(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Risk == nil {
+		http.Error(w, `{"error":"risk data unavailable"}`, http.StatusNotImplemented)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	data, err := s.deps.Risk(ctx)
+	if err != nil {
+		http.Error(w, `{"error":"failed to load risk data"}`, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, data)
+}
+
+func (s *Server) handleCron(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Cron == nil {
+		http.Error(w, `{"error":"cron unavailable"}`, http.StatusNotImplemented)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	data, err := s.deps.Cron(ctx)
+	if err != nil {
+		http.Error(w, `{"error":"failed to load cron jobs"}`, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, data)
+}
+
+func (s *Server) handleCronAction(w http.ResponseWriter, r *http.Request) {
+	// Parse /api/cron/{id}/{action}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/cron/"), "/")
+	if len(parts) < 2 {
+		http.Error(w, `{"error":"expected /api/cron/{id}/{action}"}`, http.StatusBadRequest)
+		return
+	}
+	id, action := parts[0], parts[1]
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	var err error
+	switch action {
+	case "fire":
+		if s.deps.CronFire == nil {
+			http.Error(w, `{"error":"cron fire unavailable"}`, http.StatusNotImplemented)
+			return
+		}
+		err = s.deps.CronFire(ctx, id)
+	case "toggle":
+		if s.deps.CronToggle == nil {
+			http.Error(w, `{"error":"cron toggle unavailable"}`, http.StatusNotImplemented)
+			return
+		}
+		err = s.deps.CronToggle(ctx, id)
+	default:
+		http.Error(w, `{"error":"unknown cron action"}`, http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"status": "ok", "action": action, "id": id})
 }
 
 func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {

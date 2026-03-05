@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import {
   LayoutDashboard, TrendingUp, History, BarChart3,
   Cpu, Activity, ScrollText, MessageSquare, Settings,
+  Gauge, FolderOpen, ShieldAlert, Clock,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { DeckView } from '@/views/deck'
@@ -9,9 +10,14 @@ import { ChatView } from '@/views/chat'
 import { ProvidersView } from '@/views/providers'
 import { DecisionsView } from '@/views/decisions'
 import { LogsView } from '@/views/logs'
+import { UsageView } from '@/views/usage'
+import { ConfigView } from '@/views/config'
+import { SessionsView } from '@/views/sessions'
+import { RiskView } from '@/views/risk'
+import { CronView } from '@/views/cron'
 import './index.css'
 
-type View = 'deck' | 'equity' | 'decisions' | 'analytics' | 'providers' | 'diagnostics' | 'logs' | 'chat' | 'config'
+type View = 'deck' | 'equity' | 'decisions' | 'analytics' | 'providers' | 'diagnostics' | 'logs' | 'chat' | 'config' | 'usage' | 'sessions' | 'risk' | 'cron'
 
 const NAV_GROUPS = [
   {
@@ -22,6 +28,15 @@ const NAV_GROUPS = [
       { id: 'equity' as View, icon: TrendingUp, label: 'Equity' },
       { id: 'decisions' as View, icon: History, label: 'Decisions' },
       { id: 'analytics' as View, icon: BarChart3, label: 'Analytics' },
+    ],
+  },
+  {
+    label: 'DATA',
+    items: [
+      { id: 'usage' as View, icon: Gauge, label: 'Usage' },
+      { id: 'sessions' as View, icon: FolderOpen, label: 'Sessions' },
+      { id: 'risk' as View, icon: ShieldAlert, label: 'Risk' },
+      { id: 'cron' as View, icon: Clock, label: 'Cron Jobs' },
     ],
   },
   {
@@ -89,10 +104,14 @@ export default function App() {
           {view === 'providers' && <ProvidersView />}
           {view === 'decisions' && <DecisionsView />}
           {view === 'logs' && <LogsView />}
+          {view === 'usage' && <UsageView />}
+          {view === 'config' && <ConfigView />}
+          {view === 'sessions' && <SessionsView />}
+          {view === 'risk' && <RiskView />}
+          {view === 'cron' && <CronView />}
           {view === 'equity' && <PlaceholderView name="Equity" />}
           {view === 'analytics' && <PlaceholderView name="Analytics" />}
           {view === 'diagnostics' && <PlaceholderView name="Diagnostics" />}
-          {view === 'config' && <PlaceholderView name="Config" />}
         </div>
       </main>
     </div>
