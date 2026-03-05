@@ -41,7 +41,7 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-var version = "4.2.0"
+var version = "4.2.1"
 
 type alertSender interface {
 	Send(ctx context.Context, text string)
@@ -1252,7 +1252,7 @@ func main() {
 	if dashboardServer != nil {
 		banner.Step("SSE Push", logging.StatusOK, "/api/events (live stream)")
 		banner.Step("Model Switch", logging.StatusOK, "POST /api/switch-model")
-		apiCount := 11 // snapshot, decisions, sessions, diagnostics, ops, logs, equity, analytics, events, switch-model, index
+		apiCount := 19 // 11 original + 2 mode/chat + 6 Phase-2 (usage, config×2, sessions, risk, cron)
 		banner.Step("API Endpoints", logging.StatusOK, fmt.Sprintf("%d routes registered", apiCount))
 	}
 

@@ -149,7 +149,7 @@ cd C:\PhantomClaw
 
 You should see:
 ```
-  🐾 PhantomClaw v4.1.0
+  🐾 PhantomClaw v4.2.1
   ──────────────────────────────────────
   Config       ✓  AUTO mode · Asia/Kuala_Lumpur
   Secrets      ✓  loaded from .secrets
@@ -161,31 +161,39 @@ You should see:
   Telegram     ✓  connected
   SSE Push     ✓  /api/events (live stream)
   Model Switch ✓  POST /api/switch-model
-  API Endpoints ✓  11 routes registered
+  API Endpoints ✓  19 routes registered
   Hot Reload   ✓  watching config.yaml
   ──────────────────────────────────────
   Ready. Waiting for EA signals...
 ```
 
-Open `http://127.0.0.1:8080` for the live dashboard (SSE stream + model switcher), or send `/status` on Telegram.
+Open `http://127.0.0.1:8080` for the live React control deck, or send `/status` on Telegram.
 
 ---
 
 ## 📊 Dashboard
 
-PhantomClaw includes a **Bloomberg-inspired control deck** accessible at `http://127.0.0.1:8080` (configurable). The dashboard uses **Server-Sent Events (SSE)** for real-time updates — no manual refresh needed.
+PhantomClaw includes a **React-powered control deck** (Vite + TypeScript + Tailwind + shadcn/ui) accessible at `http://127.0.0.1:8080` (configurable). The dashboard uses **Server-Sent Events (SSE)** for real-time updates — no manual refresh needed.
 
-### Views
+### Views (15 total)
 
 | View | What It Shows |
 |------|---------------|
-| **Control Deck** | KPI cards (mode, session, positions, daily P&L), mini equity chart, provider panel, recent decisions |
-| **Equity Curve** | Full-width TradingView chart of cumulative P&L over time |
-| **Decisions** | Filterable decision history with action badges and status |
-| **Analytics** | Win rate, total/avg P&L, per-pair breakdown table |
-| **Providers** | LLM provider status, active primary indicator, model switcher |
-| **Diagnostics** | Operations Truth (`GREEN/AMBER/RED`), reason codes, component health, freshness labels |
-| **Live Logs** | Rolling log stream with level/component/message filters |
+| **Control Deck** | Mode switcher (OBSERVE/SUGGEST/AUTO/HALT), KPI cards, positions, P&L |
+| **Chat** | Interactive AI chat with streaming responses |
+| **Live Feed** | Animated trade event cards with action icons and P&L coloring |
+| **Equity Curve** | Cumulative P&L chart |
+| **Decisions** | Decision history with color-coded badges |
+| **Analytics** | Win rate, per-pair breakdown |
+| **Usage** | Token usage per provider, request counts, cost estimate |
+| **Sessions** | Chat session history browser |
+| **Risk** | Drawdown/loss/position gauges with near-limit warnings |
+| **Cron Jobs** | Scheduled job manager (toggle, manual fire) |
+| **Providers** | LLM provider status, primary indicator, model switcher |
+| **Diagnostics** | Operations Truth, component health |
+| **Live Logs** | Rolling log stream with level colors |
+| **Config** | Edit config.yaml + soul.md from browser |
+| **Theme** | Dark/light mode + 5 accent colors |
 
 ### Configuration
 
@@ -199,7 +207,7 @@ dashboard:
 
 > ⚠️ If you bind to a non-loopback address without auth configured, the bot will **automatically fall back to 127.0.0.1** for safety.
 
-### API Endpoints
+### API Endpoints (19 routes)
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -209,10 +217,19 @@ dashboard:
 | GET | `/api/decisions?limit=200&symbol=XAUUSD` | Decision history |
 | GET | `/api/sessions?limit=100&pair=XAUUSD` | Conversation/session turns |
 | GET | `/api/diagnostics` | Component health (secrets auto-redacted) |
-| GET | `/api/ops` | Operational truth snapshot for dashboard/Telegram |
+| GET | `/api/ops` | Operational truth snapshot |
 | GET | `/api/logs?level=error&limit=100` | Filtered log entries |
-| GET | `/api/events` | SSE stream (snapshot + logs + ops every 3s) |
+| GET | `/api/events` | SSE stream (snapshot + logs every 3s) |
 | POST | `/api/switch-model?name=claude` | Switch primary LLM provider |
+| POST | `/api/mode` | Switch bot mode (OBSERVE/SUGGEST/AUTO/HALT) |
+| POST | `/api/chat` | Send message to AI agent |
+| GET | `/api/usage` | Token usage stats per provider |
+| GET | `/api/config` | Read config.yaml + soul.md |
+| POST | `/api/config` | Save config file changes |
+| GET | `/api/sessions/list` | Chat session history |
+| GET | `/api/risk` | Risk metrics + limit status |
+| GET | `/api/cron` | List scheduled cron jobs |
+| POST | `/api/cron/{id}/fire` | Manually trigger a cron job |
 
 ---
 
@@ -398,51 +415,12 @@ PhantomClaw/
 ├── phantomclaw.exe          ← The bot (after you build it)
 ├── config.example.yaml      ← Safe template (tracked)
 ├── config.yaml              ← Your local settings (gitignored)
-├── VERSION                  ← Current version (4.1.0)
+├── VERSION                  ← Current version (4.2.1)
 ├── v4.1_blueprint.md        ← Hardening roadmap
 ├── v4.2_blueprint.md        ← Observability & operational-truth roadmap
 ├── v4.2_runbook.md          ← Reason-code incident response runbook
 ├── scripts/
 │   └── phantomclaw.ps1      ← Build/run/test menu script
-├── ea/
-│   └── PhantomClaw.mq5      ← MT5 Expert Advisor (copy to MT5)
-├── data/
-│   ├── phantom.db            ← Memory database (auto-created)
-│   ├── sessions/             ← Conversation history (JSONL)
-│   └── logs/
-│       └── phantomclaw.log   ← Structured JSON log file
-├── cmd/phantomclaw/
-│   └── main.go               ← Entry point + wiring
-├── internal/
-│   ├── agent/                 ← AI decision engine (ReAct loop)
-│   ├── bridge/                ← MT5 EA communication (REST API)
-│   ├── config/                ← Config loading + validation
-│   ├── dashboard/             ← Dashboard server + Bloomberg UI
-│   │   ├── server.go          ← API routes + SSE handler
-│   │   ├── security.go        ← Auth middleware + secret redaction
-│   │   └── assets/index.html  ← Single-page dashboard (embedded)
-│   ├── llm/                   ← AI providers + smart router
-│   │   ├── generic.go         ← OpenAI-compatible adapter
-│   │   ├── router.go          ← Router with cooldown + queued switches
-│   │   └── errors.go          ← Error classifier
-│   ├── logging/               ← Structured logging + startup banner
-│   │   ├── banner.go          ← Pretty startup/shutdown output
-│   │   └── query.go           ← Log file query engine
-│   ├── memory/                ← Database, learning, analytics
-│   │   ├── db.go              ← Trades, decisions, equity curve, pair analytics
-│   │   └── session.go         ← Conversation history (JSONL)
-│   ├── market/                ← Market data feeds
-│   ├── risk/                  ← Safety guardrails
-│   ├── safety/                ← Mode manager (AUTO/OBSERVE/HALT)
-│   ├── scheduler/             ← Session cron + heartbeat
-│   ├── skills/                ← Agent tools (trade, cron, web)
-│   └── telegram/              ← Telegram bot commands
-└── PRD.md                     ← Product Requirements Document
-```
-
----
-
-## ❓ Troubleshooting
 
 ### "agent brain not configured"
 → You haven't set any provider key. Set `PHANTOM_LLM_PROVIDERS_0_API_KEY` (or another configured provider index).
@@ -482,4 +460,4 @@ Start-Process -WindowStyle Hidden .\phantomclaw.exe
 
 ---
 
-*Built with Go, Claude, and a lot of coffee ☕ · v4.1.0*
+*Built with Go, Claude, and a lot of coffee ☕ · v4.2.1*
