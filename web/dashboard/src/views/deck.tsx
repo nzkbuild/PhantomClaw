@@ -103,7 +103,7 @@ export function DeckView({ snapshot: _sseSnapshot, onSnapshot }: { snapshot: unk
                 </Card>
                 <Card className="bg-surface border-border">
                     <CardContent className="p-4">
-                        <div className="text-[10px] font-semibold tracking-[.12em] uppercase text-muted mb-2">Win Rate (7d)</div>
+                        <div className="text-[10px] font-semibold tracking-[.12em] uppercase text-muted mb-2">Session</div>
                         <div className="font-mono text-xl font-semibold">{snap.session || 'N/A'}</div>
                     </CardContent>
                 </Card>

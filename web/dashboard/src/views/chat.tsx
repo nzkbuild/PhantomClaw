@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Send, Bot, User } from 'lucide-react'
+import { sendChat } from '@/lib/api'
 
 type Message = {
     role: 'user' | 'assistant'
@@ -27,12 +28,7 @@ export function ChatView() {
         setLoading(true)
 
         try {
-            const res = await fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: userMsg.content }),
-            })
-            const data = await res.json()
+            const data = await sendChat(userMsg.content)
             setMessages((prev) => [...prev, { role: 'assistant', content: data.reply || 'No response.', ts: new Date() }])
         } catch (e) {
             setMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${e}`, ts: new Date() }])
@@ -63,8 +59,8 @@ export function ChatView() {
                             </div>
                         )}
                         <Card className={`max-w-[70%] px-4 py-3 text-sm leading-relaxed ${msg.role === 'user'
-                                ? 'bg-surface-3 border-border-2 text-[#e2e8f0]'
-                                : 'bg-surface border-border'
+                            ? 'bg-surface-3 border-border-2 text-[#e2e8f0]'
+                            : 'bg-surface border-border'
                             }`}>
                             <p className="whitespace-pre-wrap">{msg.content}</p>
                         </Card>
