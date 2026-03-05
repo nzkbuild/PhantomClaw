@@ -1012,6 +1012,75 @@ func main() {
 				}
 				return brain.HandleChat(ctx, message)
 			},
+			Usage: func(_ context.Context, days int) (map[string]any, error) {
+				if llmRouter == nil || llmRouter.Usage() == nil {
+					return map[string]any{"usage": []any{}, "total_tokens": 0, "total_requests": 0}, nil
+				}
+				stats := llmRouter.Usage().DailyStats()
+				usage := make([]map[string]any, 0, len(stats))
+				totalTokens := 0
+				totalRequests := 0
+				for _, s := range stats {
+					usage = append(usage, map[string]any{
+						"name":           s.Provider,
+						"requests":       s.Requests,
+						"tokens":         s.TotalTokens,
+						"avg_latency_ms": s.AvgLatencyMs,
+						"errors":         0,
+					})
+					totalTokens += s.TotalTokens
+					totalRequests += s.Requests
+				}
+				return map[string]any{
+					"usage":          usage,
+					"total_tokens":   totalTokens,
+					"total_requests": totalRequests,
+				}, nil
+			},
+			Config: func(_ context.Context) (map[string]any, error) {
+				dir := filepath.Dir(*configPath)
+				files := make([]map[string]string, 0, 2)
+				for _, name := range []string{"config.yaml", "soul.md"} {
+					content, err := os.ReadFile(filepath.Join(dir, name))
+					if err != nil {
+						files = append(files, map[string]string{"name": name, "path": name, "content": fmt.Sprintf("(unable to read: %v)", err)})
+						continue
+					}
+					files = append(files, map[string]string{"name": name, "path": name, "content": string(content)})
+				}
+				return map[string]any{"files": files}, nil
+			},
+			SaveConfig: func(_ context.Context, file string, content string) error {
+				dir := filepath.Dir(*configPath)
+				target := filepath.Join(dir, file)
+				return os.WriteFile(target, []byte(content), 0644)
+			},
+			SessionsList: func(_ context.Context) (map[string]any, error) {
+				// Return empty list — chat sessions are ephemeral in-memory for now
+				return map[string]any{"sessions": []any{}}, nil
+			},
+			Risk: func(_ context.Context) (map[string]any, error) {
+				stats := riskEngine.Stats()
+				return map[string]any{"risk": map[string]any{
+					"max_lot":              cfg.Risk.MaxLotSize,
+					"max_daily_loss":       stats.MaxDailyLossUSD,
+					"current_daily_loss":   stats.DailyLoss,
+					"max_drawdown_pct":     stats.MaxDrawdownPct,
+					"current_drawdown_pct": 0.0,
+					"open_positions":       stats.OpenPositions,
+					"max_positions":        stats.MaxPositions,
+					"daily_loss_pct":       0.0,
+				}}, nil
+			},
+			Cron: func(_ context.Context) (map[string]any, error) {
+				return map[string]any{"jobs": []any{}}, nil
+			},
+			CronFire: func(_ context.Context, id string) error {
+				return fmt.Errorf("cron jobs not configured")
+			},
+			CronToggle: func(_ context.Context, id string) error {
+				return fmt.Errorf("cron jobs not configured")
+			},
 		}, authMiddleware)
 	}
 
