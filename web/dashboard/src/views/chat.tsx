@@ -38,13 +38,13 @@ export function ChatView() {
     }
 
     return (
-        <div className="flex flex-col h-[calc(100vh-56px)]">
+        <div className="flex h-full min-h-0 flex-col p-5 pb-20 md:pb-5">
             <div className="flex items-center justify-between mb-4">
                 <h1 className="text-lg font-semibold">Chat</h1>
             </div>
 
             {/* Messages */}
-            <div className="flex-1 overflow-y-auto space-y-3 pr-2">
+            <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-2">
                 {messages.length === 0 && (
                     <div className="flex flex-col items-center justify-center h-full text-muted text-sm">
                         <Bot className="w-12 h-12 mb-3 text-muted-2" />
@@ -85,7 +85,7 @@ export function ChatView() {
             </div>
 
             {/* Input */}
-            <div className="mt-4 flex gap-2">
+            <div className="mt-4 flex gap-2 shrink-0">
                 <input
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
